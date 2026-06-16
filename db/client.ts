@@ -6,7 +6,8 @@ let sqlInstance: ReturnType<typeof postgres> | null = null;
 export function getSql() {
   if (!sqlInstance) {
     sqlInstance = postgres(getDatabaseDsn(), {
-      max: 1,
+      // cron 后台任务与 HTTP 请求共用此单例连接池,留出多个连接避免相互阻塞
+      max: 5,
       idle_timeout: 20,
       connect_timeout: 10,
     });

@@ -1,6 +1,7 @@
 import { getSql } from "../db/client.ts";
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
+import type { CheckinStatus } from "../types/enums.ts";
 
 const adapter = new NewApiAdapter();
 
@@ -185,6 +186,33 @@ export async function deleteAccount(id: number) {
   await sql`delete from accounts where id = ${id}`;
 }
 
+interface CheckinResult {
+  success: boolean;
+  message: string;
+  quotaAwarded: number | null;
+}
+
+/** new-api 签到接口 HTTP 恒为 200,业务结果在 body;非 JSON(站点异常)返回 null。 */
+function parseCheckinResult(text: string): CheckinResult | null {
+  try {
+    const obj = JSON.parse(text) as {
+      success?: boolean;
+      message?: string;
+      data?: { quota_awarded?: number } | null;
+    };
+    if (typeof obj?.success !== "boolean") return null;
+    return {
+      success: obj.success,
+      message: obj.message ?? "",
+      quotaAwarded: typeof obj.data?.quota_awarded === "number"
+        ? obj.data.quota_awarded
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function checkinAccount(id: number) {
   const sql = getSql();
   const rows = await sql<
@@ -210,16 +238,54 @@ export async function checkinAccount(id: number) {
       accessToken: account.access_token,
     });
     const text = await response.text();
-    const checkinStatus = response.ok ? "checked" : "failed";
+    const parsed = parseCheckinResult(text);
+
+    let checkinStatus: CheckinStatus;
+    let taskStatus: "success" | "failed" | "skipped";
+    let message: string;
+
+    if (!parsed) {
+      // body 非 JSON(站点挂掉返回 HTML、网关错误等)
+      checkinStatus = "failed";
+      taskStatus = "failed";
+      message = text.slice(0, 1000) || `http ${response.status}`;
+    } else if (parsed.success) {
+      checkinStatus = "checked";
+      taskStatus = "success";
+      message = parsed.quotaAwarded != null
+        ? `签到成功 +${parsed.quotaAwarded}`
+        : (parsed.message || "签到成功");
+    } else if (/已签到|已经签到|已签/.test(parsed.message)) {
+      // 今日已签到,视为已完成,不算失败
+      checkinStatus = "checked";
+      taskStatus = "success";
+      message = parsed.message || "今日已签到";
+    } else if (/turnstile|captcha|验证码|人机验证/i.test(parsed.message)) {
+      // 需要人机验证,自动签到无法完成
+      checkinStatus = "manual_required";
+      taskStatus = "skipped";
+      message = parsed.message;
+    } else {
+      // 其他业务失败(如「签到功能未启用」)
+      checkinStatus = "failed";
+      taskStatus = "failed";
+      message = parsed.message || text.slice(0, 1000);
+    }
+
     const logId = await createSystemTaskLog({
       taskType: "account_checkin",
-      status: response.ok ? "success" : "failed",
+      status: taskStatus,
       siteId: account.site_id,
       accountId: account.id,
-      message: text.slice(0, 1000),
+      message: message.slice(0, 1000),
     });
     await sql`update accounts set checkin_status = ${checkinStatus}, last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
-    return { ok: response.ok, status: response.status, body: text };
+    return {
+      ok: checkinStatus === "checked",
+      status: response.status,
+      checkinStatus,
+      body: text,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const logId = await createSystemTaskLog({

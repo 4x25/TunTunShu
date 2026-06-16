@@ -4,7 +4,9 @@ import { getSql } from "../../../db/client.ts";
 import { defaultSettings } from "../../../lib/config.ts";
 import { getAuthKey } from "../../../lib/env.ts";
 import { maskKey } from "../../../lib/mask.ts";
-import type { ChatCompletionRequest } from "../../../types/openai.ts";
+import { openaiError } from "../../../lib/response.ts";
+import { createUsageSniffingStream } from "../../../lib/sse.ts";
+import type { ChatCompletionRequest, Usage } from "../../../types/openai.ts";
 
 const adapter = new NewApiAdapter();
 
@@ -13,6 +15,13 @@ interface RoutableModel {
   upstream_name: string;
   api_key: string;
   origin: string;
+}
+
+interface LogBase {
+  requestIp: string | null;
+  requestPath: string;
+  requestKey: string | null;
+  requestModel: string;
 }
 
 function splitKeys(value: string | null): string[] {
@@ -78,11 +87,51 @@ function shuffle<T>(items: T[]): T[] {
   return [...items].sort(() => Math.random() - 0.5);
 }
 
+function logBase(candidate: RoutableModel, base: LogBase) {
+  return {
+    requestIp: base.requestIp,
+    requestPath: base.requestPath,
+    requestKey: base.requestKey,
+    requestModel: base.requestModel,
+    upstreamUrl: `${candidate.origin}/v1/chat/completions`,
+    upstreamKey: maskKey(candidate.api_key),
+    upstreamModel: candidate.upstream_name,
+    upstreamModelId: candidate.upstream_model_id,
+  };
+}
+
+/** 改写 model 名;客户端未显式设置 stream_options 时注入 include_usage 以统计 token。 */
+function buildUpstreamBody(
+  body: ChatCompletionRequest,
+  upstreamModel: string,
+): ChatCompletionRequest {
+  const out: ChatCompletionRequest = { ...body, model: upstreamModel };
+  if (out.stream === true && out.stream_options == null) {
+    out.stream_options = { include_usage: true };
+  }
+  return out;
+}
+
+function parseUsage(text: string): Usage | null {
+  try {
+    const obj = JSON.parse(text) as { usage?: Partial<Usage> | null };
+    if (obj?.usage && typeof obj.usage.total_tokens === "number") {
+      return obj.usage as Usage;
+    }
+  } catch {
+    // 声称成功却非 JSON → usage 留 null
+  }
+  return null;
+}
+
 async function writeRequestLog(input: {
   status: "success" | "failed";
   requestType: "final" | "retry";
   httpStatus: number | null;
   latencyMs: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
   requestIp: string | null;
   requestPath: string;
   requestKey: string | null;
@@ -96,11 +145,15 @@ async function writeRequestLog(input: {
   const sql = getSql();
   await sql`
     insert into request_logs (
-      status, request_type, http_status, latency_ms, request_ip, request_path,
+      status, request_type, http_status,
+      prompt_tokens, completion_tokens, total_tokens,
+      latency_ms, request_ip, request_path,
       request_key, request_model, upstream_url, upstream_key, upstream_model,
       upstream_model_id, error_message
     ) values (
-      ${input.status}, ${input.requestType}, ${input.httpStatus}, ${input.latencyMs}, ${input.requestIp}, ${input.requestPath},
+      ${input.status}, ${input.requestType}, ${input.httpStatus},
+      ${input.promptTokens}, ${input.completionTokens}, ${input.totalTokens},
+      ${input.latencyMs}, ${input.requestIp}, ${input.requestPath},
       ${input.requestKey}, ${input.requestModel}, ${input.upstreamUrl}, ${input.upstreamKey}, ${input.upstreamModel},
       ${input.upstreamModelId}, ${input.errorMessage}
     )
@@ -111,17 +164,28 @@ export const handler = define.handlers({
   async POST(ctx) {
     const token = extractBearer(ctx.req);
     if (!token || !(await getProxyKeys()).includes(token)) {
-      return new Response("Unauthorized", { status: 401 });
+      return openaiError("Invalid authentication credentials", {
+        status: 401,
+        code: "invalid_api_key",
+      });
     }
 
     const body = await ctx.req.json().catch(() => null) as
       | ChatCompletionRequest
       | null;
-    if (!body?.model) return new Response("Bad Request", { status: 400 });
+    if (!body?.model) {
+      return openaiError("Invalid request body: 'model' is required", {
+        status: 400,
+        param: "model",
+      });
+    }
 
     const candidates = shuffle(await findRoutableModels(body.model));
     if (!candidates.length) {
-      return new Response("Model not found", { status: 404 });
+      return openaiError(
+        `The model '${body.model}' does not exist or is not available`,
+        { status: 404, code: "model_not_found", param: "model" },
+      );
     }
 
     const retryCount = Math.max(
@@ -135,86 +199,137 @@ export const handler = define.handlers({
       0,
       Math.min(candidates.length, retryCount + 1),
     );
-    const requestPath = new URL(ctx.req.url).pathname;
-    const requestIp =
-      ctx.req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+    const base: LogBase = {
+      requestIp:
+        ctx.req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+      requestPath: new URL(ctx.req.url).pathname,
+      requestKey: maskKey(token),
+      requestModel: body.model,
+    };
+    const isStream = body.stream === true;
 
-    let lastResponse: Response | null = null;
-    let lastBody = "";
     let lastError: string | null = null;
+    let lastErrorResponse:
+      | { status: number; body: string; contentType: string }
+      | null = null;
 
     for (const [index, candidate] of attempts.entries()) {
-      const abortController = new AbortController();
-      const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+      const isFinal = index === attempts.length - 1;
       const startedAt = Date.now();
-      const upstreamUrl = `${candidate.origin}/v1/chat/completions`;
+      const abortController = new AbortController();
+      const headerTimer = setTimeout(() => abortController.abort(), timeoutMs);
+
+      let response: Response;
       try {
-        const response = await adapter.chatCompletions(
+        response = await adapter.chatCompletions(
           { origin: candidate.origin, apiKey: candidate.api_key },
-          { ...body, model: candidate.upstream_name },
+          buildUpstreamBody(body, candidate.upstream_name),
           abortController.signal,
         );
-        clearTimeout(timeout);
-        const text = await response.text();
-        lastResponse = response;
-        lastBody = text;
-        lastError = response.ok ? null : text.slice(0, 500);
-        const isFinal = response.ok || index === attempts.length - 1;
-        await writeRequestLog({
-          status: response.ok ? "success" : "failed",
-          requestType: isFinal ? "final" : "retry",
-          httpStatus: response.status,
-          latencyMs: Date.now() - startedAt,
-          requestIp,
-          requestPath,
-          requestKey: maskKey(token),
-          requestModel: body.model,
-          upstreamUrl,
-          upstreamKey: maskKey(candidate.api_key),
-          upstreamModel: candidate.upstream_name,
-          upstreamModelId: candidate.upstream_model_id,
-          errorMessage: response.ok ? null : lastError,
-        });
-        if (response.ok || isFinal) break;
       } catch (error) {
-        clearTimeout(timeout);
+        clearTimeout(headerTimer);
         lastError = error instanceof Error ? error.message : String(error);
-        const isFinal = index === attempts.length - 1;
         await writeRequestLog({
           status: "failed",
           requestType: isFinal ? "final" : "retry",
           httpStatus: null,
           latencyMs: Date.now() - startedAt,
-          requestIp,
-          requestPath,
-          requestKey: maskKey(token),
-          requestModel: body.model,
-          upstreamUrl,
-          upstreamKey: maskKey(candidate.api_key),
-          upstreamModel: candidate.upstream_name,
-          upstreamModelId: candidate.upstream_model_id,
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          ...logBase(candidate, base),
           errorMessage: lastError,
         });
-        if (isFinal) break;
+        continue;
       }
-    }
+      // 响应头已到达 → 解除超时,流式 body 的生成时长不再受其约束
+      clearTimeout(headerTimer);
 
-    if (lastResponse) {
-      return new Response(lastBody, {
-        status: lastResponse.status,
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        lastError = errText.slice(0, 500) || `upstream ${response.status}`;
+        lastErrorResponse = {
+          status: response.status,
+          body: errText,
+          contentType: response.headers.get("Content-Type") ??
+            "application/json",
+        };
+        await writeRequestLog({
+          status: "failed",
+          requestType: isFinal ? "final" : "retry",
+          httpStatus: response.status,
+          latencyMs: Date.now() - startedAt,
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          ...logBase(candidate, base),
+          errorMessage: lastError,
+        });
+        continue;
+      }
+
+      // 决定消费此响应 → 不再重试其他候选
+      if (isStream) {
+        const onDone = (usage: Usage | null) => {
+          // fire-and-forget,绝不阻塞流
+          void writeRequestLog({
+            status: "success",
+            requestType: "final",
+            httpStatus: response.status,
+            latencyMs: Date.now() - startedAt,
+            promptTokens: usage?.prompt_tokens ?? null,
+            completionTokens: usage?.completion_tokens ?? null,
+            totalTokens: usage?.total_tokens ?? null,
+            ...logBase(candidate, base),
+            errorMessage: null,
+          }).catch(() => {});
+        };
+        const upstream = response.body ??
+          new ReadableStream<Uint8Array>({ start: (c) => c.close() });
+        const stream = upstream.pipeThrough(createUsageSniffingStream(onDone));
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            "Content-Type": response.headers.get("Content-Type") ??
+              "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+          },
+        });
+      }
+
+      const text = await response.text();
+      const usage = parseUsage(text);
+      await writeRequestLog({
+        status: "success",
+        requestType: "final",
+        httpStatus: response.status,
+        latencyMs: Date.now() - startedAt,
+        promptTokens: usage?.prompt_tokens ?? null,
+        completionTokens: usage?.completion_tokens ?? null,
+        totalTokens: usage?.total_tokens ?? null,
+        ...logBase(candidate, base),
+        errorMessage: null,
+      });
+      return new Response(text, {
+        status: response.status,
         headers: {
-          "Content-Type": lastResponse.headers.get("Content-Type") ??
+          "Content-Type": response.headers.get("Content-Type") ??
             "application/json",
         },
       });
     }
 
-    return new Response(
-      JSON.stringify({ error: lastError ?? "Upstream request failed" }),
-      {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
+    // 所有候选都失败:优先透传上游真实错误体(保留 403/insufficient_user_quota 等)
+    if (lastErrorResponse) {
+      return new Response(lastErrorResponse.body, {
+        status: lastErrorResponse.status,
+        headers: { "Content-Type": lastErrorResponse.contentType },
+      });
+    }
+    return openaiError(lastError ?? "Upstream request failed", {
+      status: 502,
+      type: "api_error",
+    });
   },
 });

@@ -2,7 +2,7 @@ import { define } from "../../utils.ts";
 import { getSql } from "../../db/client.ts";
 import { defaultSettings } from "../../lib/config.ts";
 import { getAuthKey } from "../../lib/env.ts";
-import { json } from "../../lib/response.ts";
+import { json, openaiError } from "../../lib/response.ts";
 
 function splitKeys(value: string | null): string[] {
   return (value ?? "").split(/\r?\n/).map((item) => item.trim()).filter(
@@ -29,7 +29,10 @@ export const handler = define.handlers({
   async GET(ctx) {
     const token = extractBearer(ctx.req);
     if (!token || !(await getProxyKeys()).includes(token)) {
-      return new Response("Unauthorized", { status: 401 });
+      return openaiError("Invalid authentication credentials", {
+        status: 401,
+        code: "invalid_api_key",
+      });
     }
     const sql = getSql();
     const rows = await sql<{ name: string }[]>`
