@@ -113,6 +113,12 @@ Model 1:N UpstreamModel
   errors, random routing with retry
 - Scheduled jobs wired to Deno.cron (checkin / quota-sync / model-sync /
   health-check / log-cleanup)
-- Frontend not built yet
+- Frontend built: Fresh routes + Preact islands for login / dashboard / upstream
+  / models / logs / settings, wired to `/api/*` via `components/admin_api.ts`
+  (single-user, AUTH_KEY stored in localStorage as Bearer). Visual design system
+  in `assets/app.css`.
+- Admin CRUD: site/account/api-key/model/upstream-model all support create +
+  enable/disable (PATCH) + delete; upstream-model PATCH accepts `modelId: null`
+  to unmap.
 - v0.1.0 branch targets Deno Deploy first, Docker later
 - Tests: `lib/sse_test.ts` (SSE usage sniffing); broader suite still TODO

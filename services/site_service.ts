@@ -23,6 +23,32 @@ export async function listSites() {
   return await sql`select * from sites order by id desc`;
 }
 
+export async function updateSite(
+  id: number,
+  input: {
+    name?: string;
+    origin?: string;
+    enabled?: boolean;
+    remark?: string | null;
+  },
+) {
+  const sql = getSql();
+  const current = await sql<
+    { name: string; origin: string; enabled: boolean; remark: string | null }[]
+  >`select name, origin, enabled, remark from sites where id = ${id}`;
+  if (!current[0]) return null;
+  const name = input.name ?? current[0].name;
+  const origin = input.origin ?? current[0].origin;
+  const enabled = input.enabled ?? current[0].enabled;
+  const remark = input.remark !== undefined ? input.remark : current[0].remark;
+  await sql`
+    update sites
+    set name = ${name}, origin = ${origin}, enabled = ${enabled}, remark = ${remark}, updated_at = now()
+    where id = ${id}
+  `;
+  return { id, name, origin, enabled, remark };
+}
+
 export async function healthCheckSite(id: number) {
   const sql = getSql();
   const rows = await sql<{ id: number; origin: string }[]>`

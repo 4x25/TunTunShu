@@ -27,6 +27,37 @@ export async function listAccounts() {
   `;
 }
 
+export async function updateAccount(
+  id: number,
+  input: {
+    name?: string;
+    userId?: string;
+    accessToken?: string;
+    enabled?: boolean;
+  },
+) {
+  const sql = getSql();
+  const current = await sql<
+    {
+      name: string;
+      user_id: string;
+      access_token: string;
+      enabled: boolean;
+    }[]
+  >`select name, user_id, access_token, enabled from accounts where id = ${id}`;
+  if (!current[0]) return null;
+  const name = input.name ?? current[0].name;
+  const userId = input.userId ?? current[0].user_id;
+  const accessToken = input.accessToken ?? current[0].access_token;
+  const enabled = input.enabled ?? current[0].enabled;
+  await sql`
+    update accounts
+    set name = ${name}, user_id = ${userId}, access_token = ${accessToken}, enabled = ${enabled}, updated_at = now()
+    where id = ${id}
+  `;
+  return { id, name, userId, enabled };
+}
+
 export async function syncAccountQuota(id: number) {
   const sql = getSql();
   const rows = await sql<

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "deno",
+      "runtimeArgs": ["task", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "start",
+      "runtimeExecutable": "deno",
+      "runtimeArgs": ["task", "start"],
+      "port": 8000
+    }
+  ]
+}
