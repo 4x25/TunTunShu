@@ -1062,6 +1062,31 @@ button:focus-visible,
     transform: translateY(0) scale(1);
   }
 }
+/* DaisyUI 风格:关闭时的退场动画(.closing 由 Modal 组件在卸载前加上) */
+.modal-mask.on.closing {
+  animation: ttModalMaskOut 0.16s ease-in forwards;
+}
+.modal-card.closing {
+  animation: ttModalCardOut 0.16s ease-in forwards;
+}
+@keyframes ttModalMaskOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes ttModalCardOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
 .modal-card.wide {
   max-width: 620px;
 }

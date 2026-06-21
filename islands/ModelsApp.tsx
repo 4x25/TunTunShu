@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { IconClose } from "../components/icons.tsx";
+import { Modal } from "../components/Modal.tsx";
 import { apiGet, apiSend, getToken } from "../components/admin_api.ts";
 
 interface Model {
@@ -362,14 +363,9 @@ export default function ModelsApp() {
       </section>
 
       {/* 新建 / 编辑 弹窗 */}
-      {editId && (
-        <div
-          class="modal-mask on"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setEditId(null);
-          }}
-        >
-          <div class="modal-card">
+      <Modal open={editId !== null} onClose={() => setEditId(null)}>
+        {editId !== null && (
+          <>
             <div class="modal-head">
               <h3>
                 {editId === "new" ? "新建模型" : "编辑模型 · " + mName}
@@ -435,19 +431,14 @@ export default function ModelsApp() {
                 保存
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* 通道弹窗 */}
-      {chanModel && (
-        <div
-          class="modal-mask on"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setChanId(null);
-          }}
-        >
-          <div class="modal-card wide">
+      <Modal open={chanId !== null} onClose={() => setChanId(null)} wide>
+        {chanModel && (
+          <>
             <div class="modal-head">
               <h3>通道 · {chanModel.name}</h3>
               <button
@@ -549,9 +540,9 @@ export default function ModelsApp() {
                 关闭
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
     </>
   );
 }

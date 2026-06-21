@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import { IconClose, IconSearch } from "../components/icons.tsx";
+import { Modal } from "../components/Modal.tsx";
 import { apiGet, apiSend } from "../components/admin_api.ts";
 
 interface Site {
@@ -914,14 +915,9 @@ export default function UpstreamApp() {
       </div>
 
       {/* 创建 / 编辑弹窗 */}
-      {modal && (
-        <div
-          class="modal-mask on"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setModal(null);
-          }}
-        >
-          <div class="modal-card" role="dialog" aria-modal="true">
+      <Modal open={modal !== null} onClose={() => setModal(null)}>
+        {modal && (
+          <>
             <div class="modal-head">
               <h3>
                 {modal.mode === "create" ? "新建" : "编辑"}
@@ -1087,19 +1083,14 @@ export default function UpstreamApp() {
                 保存
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* 新增统一模型弹窗 */}
-      {nmFor !== null && (
-        <div
-          class="modal-mask on"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setNmFor(null);
-          }}
-        >
-          <div class="modal-card" role="dialog" aria-modal="true">
+      <Modal open={nmFor !== null} onClose={() => setNmFor(null)}>
+        {nmFor !== null && (
+          <>
             <div class="modal-head">
               <h3>新增统一模型</h3>
               <button
@@ -1139,9 +1130,9 @@ export default function UpstreamApp() {
                 创建并映射
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
     </>
   );
 }
