@@ -205,6 +205,7 @@ export default function UpstreamApp() {
   const [nmName, setNmName] = useState("");
   // accountId → 最近一次签到日志信息(签到失败时 hover 显示原因)
   const [checkinMsg, setCheckinMsg] = useState<Record<string, string>>({});
+  const [probing, setProbing] = useState(false); // 抓取网页标题中
 
   const [flash, setFlash] = useState<{ text: string; ok: boolean } | null>(
     null,
@@ -453,14 +454,41 @@ export default function UpstreamApp() {
     setModal({ mode: "edit", type: "account", id: a.id });
     setForm({ name: a.name, userId: a.user_id, accessToken: "" });
   }
+  /** 新建站点:请求后端抓取 origin 网页 <title> 自动补全站点名称。 */
+  async function probeTitle() {
+    const origin = (form.origin ?? "").trim();
+    if (!origin) {
+      showFlash("请先填写 Origin", false);
+      return;
+    }
+    setProbing(true);
+    try {
+      const r = await apiSend<{ title?: string | null }>(
+        "POST",
+        "/sites/probe-title",
+        { origin },
+      );
+      if (r.title) {
+        setForm((f) => ({ ...f, name: r.title as string }));
+        showFlash(`已获取标题：${r.title}`, true);
+      } else {
+        showFlash("未能获取到网页标题，请手动填写", false);
+      }
+    } catch {
+      showFlash("获取标题失败", false);
+    } finally {
+      setProbing(false);
+    }
+  }
+
   async function submitModal() {
     if (!modal) return;
     try {
       if (modal.mode === "create") {
         if (modal.type === "site") {
-          if (!form.name || !form.origin) return;
+          if (!form.origin) return;
           await apiSend("POST", "/sites", {
-            name: form.name,
+            name: form.name?.trim() || null,
             origin: form.origin,
             remark: form.remark || null,
           });
@@ -916,19 +944,38 @@ export default function UpstreamApp() {
               {modal.type === "site" && (
                 <>
                   <Field
-                    label="站点名称"
-                    hint="例如 AnyRouter"
-                    k="name"
-                    form={form}
-                    setForm={setForm}
-                  />
-                  <Field
                     label="Origin"
                     hint="例如 https://anyrouter.top"
                     k="origin"
                     form={form}
                     setForm={setForm}
                   />
+                  <div class="field">
+                    <label>站点名称（可留空，自动用网页标题）</label>
+                    <div class="token-row">
+                      <input
+                        class="input"
+                        placeholder="留空将自动抓取网页标题"
+                        value={form.name ?? ""}
+                        onInput={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            name: (e.target as HTMLInputElement).value,
+                          }))}
+                      />
+                      <button
+                        type="button"
+                        class="btn btn-sm"
+                        disabled={probing}
+                        onClick={probeTitle}
+                      >
+                        {probing ? "获取中…" : "自动获取"}
+                      </button>
+                    </div>
+                    <span class="hint">
+                      基于 Origin 请求网页 &lt;title&gt; 自动补全
+                    </span>
+                  </div>
                   <Field
                     label="备注（可选）"
                     hint=""

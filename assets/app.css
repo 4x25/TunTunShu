@@ -1024,6 +1024,16 @@ button:focus-visible,
 }
 .modal-mask.on {
   display: flex;
+  /* DaisyUI 风格:遮罩淡入 */
+  animation: ttModalMaskIn 0.18s ease-out;
+}
+@keyframes ttModalMaskIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 /* 注意:类名用 .modal-card 而非 .modal,避免与 DaisyUI 的 .modal 组件冲突
    (DaisyUI .modal 带 position:fixed;inset:0,会让卡片错位)。 */
@@ -1039,6 +1049,18 @@ button:focus-visible,
   max-height: 90vh;
   display: flex;
   flex-direction: column;
+  /* DaisyUI 风格:卡片淡入 + 轻微上移与缩放弹出 */
+  animation: ttModalCardIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes ttModalCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 .modal-card.wide {
   max-width: 620px;
