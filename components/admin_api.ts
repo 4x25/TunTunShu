@@ -65,5 +65,12 @@ export async function apiSend<T = unknown>(
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return await res.json().catch(() => ({})) as T;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data && typeof data === "object" && "error" in data
+      ? String((data as { error: unknown }).error)
+      : `请求失败(${res.status})`;
+    throw new ApiError(res.status, msg);
+  }
+  return data as T;
 }

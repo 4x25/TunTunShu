@@ -15,6 +15,19 @@ export async function initializeDatabase() {
       updated_at timestamptz not null default now()
     )
   `;
+  // origin 唯一索引(并发兜底)。表用 `create table if not exists` 建,列级 unique 对
+  // 已存在的库不会补上,故单独建索引。若历史数据已有重复 origin 会建失败 —— 此处吞掉
+  // 并告警,避免阻塞启动;清理重复后下次启动会自动补建。
+  try {
+    await sql`
+      create unique index if not exists sites_origin_key on sites (origin)
+    `;
+  } catch (error) {
+    console.warn(
+      "[init] 无法创建 sites.origin 唯一索引(可能存在重复 origin,清理后重启即可补建):",
+      error,
+    );
+  }
   await sql`
     create table if not exists accounts (
       id bigserial primary key,

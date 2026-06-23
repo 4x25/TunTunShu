@@ -393,6 +393,15 @@ button:focus-visible,
 .btn-block {
   width: 100%;
 }
+/* 按钮内联加载态:用 currentColor 适配主按钮(浅字)与幽灵按钮,复用 spin 关键帧 */
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in oklch, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
 
 /* ─── cards / panels ─────────────────────────────────────────────────── */
 .card {
@@ -581,6 +590,18 @@ button:focus-visible,
 }
 .input::placeholder {
   color: var(--faint);
+}
+/* 表单校验失败:输入框/下拉红框 + 红色聚焦环,字段下方红字提示原因 */
+.input-err,
+.input-err:focus {
+  border-color: var(--bad);
+}
+.input-err:focus {
+  box-shadow: 0 0 0 3px var(--bad-soft);
+}
+.field-err {
+  font-size: 11.5px;
+  color: var(--bad);
 }
 
 /* search input with leading icon */
@@ -900,6 +921,10 @@ button:focus-visible,
   flex: 1;
   font-family: var(--font-mono);
   font-size: 12.5px;
+}
+/* 行内辅助按钮(如「自动获取」)对齐输入框高度,避免比相邻 .input 矮一截 */
+.token-row .btn {
+  height: 34px;
 }
 
 /* ─── custom dropdown (mapping selector w/ pinned footer) ────────────── */

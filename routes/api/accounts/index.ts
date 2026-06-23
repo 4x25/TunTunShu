@@ -17,9 +17,17 @@ export const handler = define.handlers({
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
     const body = await readJson<
-      { siteId: number; name: string; userId: string; accessToken: string }
+      {
+        siteId: number;
+        name?: string | null;
+        userId: string;
+        accessToken: string;
+      }
     >(ctx.req);
-    const id = body ? await createAccount(body) : null;
+    if (!body?.siteId || !body?.userId || !body?.accessToken) {
+      return json({ error: "siteId、userId、accessToken 不能为空" }, 400);
+    }
+    const id = await createAccount(body);
     return json({ id });
   },
 });
