@@ -14,9 +14,10 @@ export const handler = define.handlers({
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
     const body = await readJson<
-      { name: string; origin: string; remark?: string | null }
+      { name?: string | null; origin: string; remark?: string | null }
     >(ctx.req);
-    const id = body ? await createSite(body) : null;
+    if (!body?.origin) return json({ error: "origin is required" }, 400);
+    const id = await createSite(body);
     return json({ id });
   },
 });

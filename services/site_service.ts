@@ -4,15 +4,47 @@ import { createSystemTaskLog } from "./system_task_log_service.ts";
 
 const adapter = new NewApiAdapter();
 
+function hostOf(origin: string): string {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  }
+}
+
+/** 请求 origin 的 /api/status,取 new-api 站点名称(data.system_name);失败返回 null。 */
+export async function fetchSystemName(origin: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${origin.replace(/\/+$/, "")}/api/status`, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; TunTunShu/1.0)" },
+      signal: AbortSignal.timeout(8000),
+      redirect: "follow",
+    });
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null) as
+      | { data?: { system_name?: unknown } }
+      | null;
+    const name = body?.data?.system_name;
+    return typeof name === "string" && name.trim() ? name.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createSite(input: {
-  name: string;
+  name?: string | null;
   origin: string;
   remark?: string | null;
 }) {
   const sql = getSql();
+  // 站点名称非必填:留空时请求 origin/api/status 取 system_name,再退回域名。
+  let name = (input.name ?? "").trim();
+  if (!name) {
+    name = (await fetchSystemName(input.origin)) ?? hostOf(input.origin);
+  }
   const rows = await sql<{ id: number }[]>`
     insert into sites (name, origin, remark)
-    values (${input.name}, ${input.origin}, ${input.remark ?? null})
+    values (${name}, ${input.origin}, ${input.remark ?? null})
     returning id
   `;
   return rows[0]?.id ?? null;
@@ -21,6 +53,32 @@ export async function createSite(input: {
 export async function listSites() {
   const sql = getSql();
   return await sql`select * from sites order by id desc`;
+}
+
+export async function updateSite(
+  id: number,
+  input: {
+    name?: string;
+    origin?: string;
+    enabled?: boolean;
+    remark?: string | null;
+  },
+) {
+  const sql = getSql();
+  const current = await sql<
+    { name: string; origin: string; enabled: boolean; remark: string | null }[]
+  >`select name, origin, enabled, remark from sites where id = ${id}`;
+  if (!current[0]) return null;
+  const name = input.name ?? current[0].name;
+  const origin = input.origin ?? current[0].origin;
+  const enabled = input.enabled ?? current[0].enabled;
+  const remark = input.remark !== undefined ? input.remark : current[0].remark;
+  await sql`
+    update sites
+    set name = ${name}, origin = ${origin}, enabled = ${enabled}, remark = ${remark}, updated_at = now()
+    where id = ${id}
+  `;
+  return { id, name, origin, enabled, remark };
 }
 
 export async function healthCheckSite(id: number) {

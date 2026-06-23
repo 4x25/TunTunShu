@@ -14,7 +14,10 @@ export async function updateUpstreamModel(
     select model_id, enabled from upstream_models where id = ${id}
   `;
   if (!current[0]) return null;
-  const modelId = input.modelId ?? current[0].model_id;
+  // 注意:用 "in" 判断而非 ??,以支持显式传 modelId:null 解除映射。
+  const modelId = "modelId" in input
+    ? (input.modelId ?? null)
+    : current[0].model_id;
   const enabled = input.enabled ?? current[0].enabled;
   await sql`
     update upstream_models

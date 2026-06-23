@@ -21,6 +21,26 @@ export async function listApiKeys() {
   return await sql`select * from api_keys order by id desc`;
 }
 
+export async function updateApiKey(
+  id: number,
+  input: { name?: string; key?: string; enabled?: boolean },
+) {
+  const sql = getSql();
+  const current = await sql<
+    { name: string; key: string; enabled: boolean }[]
+  >`select name, key, enabled from api_keys where id = ${id}`;
+  if (!current[0]) return null;
+  const name = input.name ?? current[0].name;
+  const key = input.key ?? current[0].key;
+  const enabled = input.enabled ?? current[0].enabled;
+  await sql`
+    update api_keys
+    set name = ${name}, key = ${key}, enabled = ${enabled}, updated_at = now()
+    where id = ${id}
+  `;
+  return { id, name, enabled };
+}
+
 export async function deleteApiKey(id: number) {
   const sql = getSql();
   await sql`delete from upstream_models where api_key_id = ${id}`;

@@ -1,8 +1,11 @@
 import { define } from "../../../../utils.ts";
 import { requireAdmin } from "../../../../lib/auth.ts";
 import { json } from "../../../../lib/response.ts";
-import { deleteAccount } from "../../../../services/account_service.ts";
-import { routeId } from "../../../../lib/request.ts";
+import {
+  deleteAccount,
+  updateAccount,
+} from "../../../../services/account_service.ts";
+import { readJson, routeId } from "../../../../lib/request.ts";
 
 export const handler = define.handlers({
   GET(ctx) {
@@ -10,10 +13,12 @@ export const handler = define.handlers({
     if (unauthorized) return unauthorized;
     return json({ id: routeId(ctx.params) });
   },
-  PATCH(ctx) {
+  async PATCH(ctx) {
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
-    return json({ id: routeId(ctx.params) });
+    return json(
+      await updateAccount(routeId(ctx.params), await readJson(ctx.req) ?? {}),
+    );
   },
   async DELETE(ctx) {
     const unauthorized = requireAdmin(ctx.req);
