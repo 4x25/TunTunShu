@@ -5,19 +5,84 @@ import type { CheckinStatus } from "../types/enums.ts";
 
 const adapter = new NewApiAdapter();
 
+/** 请求 origin 的 /api/user/self,取 new-api 用户名(data.username);失败返回 null。 */
+export async function fetchUsername(
+  auth: { origin: string; userId: string; accessToken: string },
+): Promise<string | null> {
+  try {
+    const res = await adapter.getUserSelf(
+      {
+        origin: auth.origin.replace(/\/+$/, ""),
+        userId: auth.userId,
+        accessToken: auth.accessToken,
+      },
+      AbortSignal.timeout(8000),
+    );
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null) as
+      | { data?: { username?: unknown } }
+      | null;
+    const name = body?.data?.username;
+    return typeof name === "string" && name.trim() ? name.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createAccount(input: {
   siteId: number;
-  name: string;
+  name?: string | null;
   userId: string;
   accessToken: string;
 }) {
   const sql = getSql();
+  // 账号名称非必填:留空时取 origin/api/user/self 的 username,再退回 userId。
+  let name = input.name?.trim() || null;
+  if (!name) {
+    const site = await sql<{ origin: string }[]>`
+      select origin from sites where id = ${input.siteId}
+    `;
+    if (site[0]) {
+      name = await fetchUsername({
+        origin: site[0].origin,
+        userId: input.userId,
+        accessToken: input.accessToken,
+      });
+    }
+    name = name || input.userId;
+  }
   const rows = await sql<{ id: number }[]>`
     insert into accounts (site_id, name, user_id, access_token)
-    values (${input.siteId}, ${input.name}, ${input.userId}, ${input.accessToken})
+    values (${input.siteId}, ${name}, ${input.userId}, ${input.accessToken})
     returning id
   `;
   return rows[0]?.id ?? null;
+}
+
+/**
+ * 编辑账号时按账号 id 自动补全用户名:origin 取自账号所属站点;userId/accessToken
+ * 留空则用库里已存的(配合「AccessToken 留空不修改」)。失败返回 null。
+ */
+export async function probeAccountUsername(
+  id: number,
+  overrides: { userId?: string; accessToken?: string },
+): Promise<string | null> {
+  const sql = getSql();
+  const rows = await sql<
+    { user_id: string; access_token: string; origin: string }[]
+  >`
+    select accounts.user_id, accounts.access_token, sites.origin
+    from accounts
+    join sites on sites.id = accounts.site_id
+    where accounts.id = ${id}
+  `;
+  const acct = rows[0];
+  if (!acct) return null;
+  return await fetchUsername({
+    origin: acct.origin,
+    userId: overrides.userId?.trim() || acct.user_id,
+    accessToken: overrides.accessToken?.trim() || acct.access_token,
+  });
 }
 
 export async function listAccounts() {

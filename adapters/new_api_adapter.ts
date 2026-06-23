@@ -27,9 +27,13 @@ export class NewApiAdapter {
     });
   }
 
-  async getUserSelf(auth: NewApiUserAuth): Promise<Response> {
+  async getUserSelf(
+    auth: NewApiUserAuth,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return await fetch(`${auth.origin}/api/user/self`, {
       headers: this.userHeaders(auth),
+      signal,
     });
   }
 

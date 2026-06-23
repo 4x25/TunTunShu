@@ -17,6 +17,7 @@ interface Account {
   site_id: string;
   name: string;
   user_id: string;
+  access_token: string;
   enabled: boolean;
   status: string;
   quota: string;
@@ -212,6 +213,8 @@ export default function UpstreamApp() {
     null,
   );
   const [busy, setBusy] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false); // 弹窗保存请求进行中
+  const [errors, setErrors] = useState<Record<string, string>>({}); // 字段校验错误
 
   async function load() {
     setLoading(true);
@@ -305,6 +308,17 @@ export default function UpstreamApp() {
     } finally {
       setBusy(null);
     }
+  }
+
+  /** 用户编辑字段:写入 form 并清掉该字段的校验错误高亮。 */
+  function updateField(k: string, v: string) {
+    setForm((f) => ({ ...f, [k]: v }));
+    setErrors((e) => {
+      if (!(k in e)) return e;
+      const n = { ...e };
+      delete n[k];
+      return n;
+    });
   }
 
   const siteName = (id: string) => sites.find((x) => x.id === id)?.name ?? "";
@@ -445,15 +459,22 @@ export default function UpstreamApp() {
 
   function openCreate(type: CreateType) {
     setModal({ mode: "create", type });
-    setForm({});
+    // 已选中上级时,预填新建弹窗的归属下拉(账号→所属站点,APIKey→所属账号)
+    const preset: Record<string, string> = {};
+    if (type === "account" && sel.site) preset.siteId = sel.site;
+    if (type === "apikey" && sel.account) preset.accountId = sel.account;
+    setForm(preset);
+    setErrors({});
   }
   function openEditSite(s: Site) {
     setModal({ mode: "edit", type: "site", id: s.id });
     setForm({ name: s.name, origin: s.origin, remark: s.remark ?? "" });
+    setErrors({});
   }
   function openEditAccount(a: Account) {
     setModal({ mode: "edit", type: "account", id: a.id });
-    setForm({ name: a.name, userId: a.user_id, accessToken: "" });
+    setForm({ name: a.name, userId: a.user_id, accessToken: a.access_token });
+    setErrors({});
   }
   /** 新建站点:请求后端读取 origin 的 /api/status(system_name)自动补全站点名称。 */
   async function probeTitle() {
@@ -481,57 +502,219 @@ export default function UpstreamApp() {
       setProbing(false);
     }
   }
+  /** 新建账号:请求后端读取所属站点 origin 的 /api/user/self(username)自动补全账号名称。 */
+  async function probeUsername() {
+    const origin = sites.find((s) => s.id === form.siteId)?.origin;
+    const userId = (form.userId ?? "").trim();
+    const accessToken = (form.accessToken ?? "").trim();
+    if (!origin) {
+      showFlash("请先选择所属站点", false);
+      return;
+    }
+    if (!userId || !accessToken) {
+      showFlash("请先填写用户 ID 和 AccessToken", false);
+      return;
+    }
+    setProbing(true);
+    try {
+      const r = await apiSend<{ name?: string | null }>(
+        "POST",
+        "/accounts/probe-name",
+        { origin, userId, accessToken },
+      );
+      if (r.name) {
+        setForm((f) => ({ ...f, name: r.name as string }));
+        showFlash(`已获取账号名称：${r.name}`, true);
+      } else {
+        showFlash("未能获取账号名称，请手动填写", false);
+      }
+    } catch {
+      showFlash("获取账号名称失败", false);
+    } finally {
+      setProbing(false);
+    }
+  }
+  /** 编辑账号:按账号 id 自动补全用户名(userId/token 留空则用库里已存的凭据)。 */
+  async function probeUsernameEdit(accountId: string) {
+    setProbing(true);
+    try {
+      const r = await apiSend<{ name?: string | null }>(
+        "POST",
+        `/accounts/${accountId}/probe-name`,
+        { userId: form.userId, accessToken: form.accessToken },
+      );
+      if (r.name) {
+        updateField("name", r.name);
+        showFlash(`已获取账号名称：${r.name}`, true);
+      } else {
+        showFlash("未能获取账号名称，请手动填写", false);
+      }
+    } catch (e) {
+      showFlash(e instanceof Error ? e.message : "获取账号名称失败", false);
+    } finally {
+      setProbing(false);
+    }
+  }
+
+  /** 弹窗表单校验:返回「字段 → 错误原因」映射,空对象表示通过。 */
+  function validate(m: ModalSpec): Record<string, string> {
+    const e: Record<string, string> = {};
+    const need = (k: string, msg: string) => {
+      if (!(form[k] ?? "").trim()) e[k] = msg;
+    };
+    if (m.mode === "create") {
+      if (m.type === "site") need("origin", "Origin 必填");
+      else if (m.type === "account") {
+        need("siteId", "请选择所属站点");
+        need("userId", "用户 ID 必填");
+        need("accessToken", "AccessToken 必填");
+      } else {
+        need("accountId", "请选择所属账号");
+        need("name", "Key 名称必填");
+        need("key", "Key 必填");
+      }
+    } else if (m.type === "site") {
+      need("name", "站点名称必填");
+      need("origin", "Origin 必填");
+    } else {
+      // 账号名称非必填(同新增):留空保持原名称,可点「自动获取」补全
+      need("userId", "用户 ID 必填");
+    }
+    return e;
+  }
 
   async function submitModal() {
-    if (!modal) return;
+    if (!modal || saving) return;
+    // 校验不通过:高亮错误字段并提示原因,不发请求。
+    const errs = validate(modal);
+    if (Object.keys(errs).length) {
+      setErrors(errs);
+      return;
+    }
+    setErrors({});
+    setSaving(true);
     try {
+      // 新建成功后高亮选中新建项(含其上级);编辑保持当前选中。
+      let next:
+        | { site: string | null; account: string | null; key: string | null }
+        | null = null;
+      let syncAcct: string | null = null; // 账号创建/编辑后待拉取额度+APIKey 的账号 id
+      let checkSite: string | null = null; // 站点创建/编辑后待检测连通性的站点 id
       if (modal.mode === "create") {
         if (modal.type === "site") {
-          if (!form.origin) return;
-          await apiSend("POST", "/sites", {
+          const r = await apiSend<{ id?: string | number }>("POST", "/sites", {
             name: form.name?.trim() || null,
             origin: form.origin,
             remark: form.remark || null,
           });
-        } else if (modal.type === "account") {
-          if (!form.siteId || !form.name || !form.userId || !form.accessToken) {
-            return;
+          if (r?.id != null) {
+            next = { site: String(r.id), account: null, key: null };
+            checkSite = String(r.id);
           }
-          await apiSend("POST", "/accounts", {
-            siteId: Number(form.siteId),
-            name: form.name,
-            userId: form.userId,
-            accessToken: form.accessToken,
-          });
+        } else if (modal.type === "account") {
+          const r = await apiSend<{ id?: string | number }>(
+            "POST",
+            "/accounts",
+            {
+              siteId: Number(form.siteId),
+              name: form.name?.trim() || null,
+              userId: form.userId,
+              accessToken: form.accessToken,
+            },
+          );
+          if (r?.id != null) {
+            next = { site: form.siteId, account: String(r.id), key: null };
+            syncAcct = String(r.id);
+          }
         } else {
-          if (!form.accountId || !form.name || !form.key) return;
-          await apiSend("POST", "/api-keys", {
-            accountId: Number(form.accountId),
-            name: form.name,
-            key: form.key,
-          });
+          const siteId = accounts.find((a) =>
+            a.id === form.accountId
+          )?.site_id ?? null;
+          const r = await apiSend<{ id?: string | number }>(
+            "POST",
+            "/api-keys",
+            {
+              accountId: Number(form.accountId),
+              name: form.name,
+              key: form.key,
+            },
+          );
+          if (r?.id != null) {
+            next = { site: siteId, account: form.accountId, key: String(r.id) };
+          }
         }
       } else if (modal.type === "site") {
-        if (!form.name || !form.origin) return;
         await apiSend("PATCH", `/sites/${modal.id}`, {
           name: form.name,
           origin: form.origin,
           remark: form.remark || null,
         });
+        checkSite = modal.id;
       } else {
-        if (!form.name || !form.userId) return;
-        const payload: Record<string, unknown> = {
-          name: form.name,
-          userId: form.userId,
-        };
+        const payload: Record<string, unknown> = { userId: form.userId };
+        const nm = form.name?.trim();
+        if (nm) payload.name = nm; // 留空则不改,保持原名称
         if (form.accessToken) payload.accessToken = form.accessToken;
         await apiSend("PATCH", `/accounts/${modal.id}`, payload);
+        syncAcct = modal.id;
       }
-      setModal(null);
       await load();
+      if (next) setSel(next);
+      setModal(null);
       showFlash(modal.mode === "create" ? "创建成功" : "已保存", true);
+      // 账号创建/编辑后立即拉取其额度与 APIKey(后台进行,不阻塞弹窗关闭)
+      if (syncAcct) void syncAccountInfo(syncAcct);
+      // 站点创建/编辑后自动检测连通性(后台进行)
+      if (checkSite) void healthCheckSiteById(checkSite);
     } catch (e) {
       showFlash(e instanceof Error ? e.message : "操作失败", false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** 账号创建/编辑后:并行拉取额度 + APIKey,刷新列表。best-effort,失败不影响账号本身。 */
+  async function syncAccountInfo(accountId: string) {
+    setBusy("acctsync" + accountId);
+    try {
+      const [quota, keys] = await Promise.all([
+        apiSend<{ ok?: boolean }>("POST", `/accounts/${accountId}/sync-quota`)
+          .catch(() => null),
+        apiSend<{ ok?: boolean; count?: number }>(
+          "POST",
+          `/accounts/${accountId}/sync-api-keys`,
+        ).catch(() => null),
+      ]);
+      await load();
+      const keyMsg = keys?.ok
+        ? `APIKey ${keys.count ?? 0} 个`
+        : "APIKey 拉取失败";
+      const quotaMsg = quota?.ok ? "额度已更新" : "额度同步失败";
+      showFlash(`账号同步：${keyMsg} · ${quotaMsg}`, !!(keys?.ok || quota?.ok));
+    } finally {
+      setBusy(null);
+    }
+  }
+  /** 站点创建/编辑后:自动检测连通性,刷新列表。best-effort。 */
+  async function healthCheckSiteById(siteId: string) {
+    setBusy("sitecheck" + siteId);
+    try {
+      const r = await apiSend<{ status?: string; httpStatus?: number }>(
+        "POST",
+        `/sites/${siteId}/health-check`,
+      ).catch(() => null);
+      await load();
+      if (r) {
+        const label = STATUS_MAP[r.status ?? "unknown"]?.[1] ?? r.status ?? "?";
+        showFlash(
+          `站点检测：${label}${r.httpStatus ? `（HTTP ${r.httpStatus}）` : ""}`,
+          r.status === "healthy",
+        );
+      } else {
+        showFlash("站点检测失败", false);
+      }
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -944,20 +1127,25 @@ export default function UpstreamApp() {
                     hint="例如 https://anyrouter.top"
                     k="origin"
                     form={form}
-                    setForm={setForm}
+                    error={errors.origin}
+                    update={updateField}
                   />
                   <div class="field">
-                    <label>站点名称（可留空，自动取站点名称）</label>
+                    <label>
+                      {modal.mode === "create"
+                        ? "站点名称（可留空，自动取站点名称）"
+                        : "站点名称"}
+                    </label>
                     <div class="token-row">
                       <input
-                        class="input"
+                        class={`input${errors.name ? " input-err" : ""}`}
                         placeholder="留空将自动获取站点名称"
                         value={form.name ?? ""}
                         onInput={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            name: (e.target as HTMLInputElement).value,
-                          }))}
+                          updateField(
+                            "name",
+                            (e.target as HTMLInputElement).value,
+                          )}
                       />
                       <button
                         type="button"
@@ -968,6 +1156,9 @@ export default function UpstreamApp() {
                         {probing ? "获取中…" : "自动获取"}
                       </button>
                     </div>
+                    {errors.name && (
+                      <span class="field-err">{errors.name}</span>
+                    )}
                     <span class="hint">
                       基于 Origin 的 /api/status（system_name）自动补全
                     </span>
@@ -977,7 +1168,7 @@ export default function UpstreamApp() {
                     hint=""
                     k="remark"
                     form={form}
-                    setForm={setForm}
+                    update={updateField}
                   />
                 </>
               )}
@@ -987,46 +1178,75 @@ export default function UpstreamApp() {
                     <div class="field">
                       <label>所属站点</label>
                       <select
-                        class="select"
+                        class={`select${errors.siteId ? " input-err" : ""}`}
                         value={form.siteId ?? ""}
                         onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            siteId: (e.target as HTMLSelectElement).value,
-                          }))}
+                          updateField(
+                            "siteId",
+                            (e.target as HTMLSelectElement).value,
+                          )}
                       >
                         <option value="">选择站点…</option>
                         {sites.map((s) => (
                           <option value={s.id} key={s.id}>{s.name}</option>
                         ))}
                       </select>
+                      {errors.siteId && (
+                        <span class="field-err">{errors.siteId}</span>
+                      )}
                     </div>
                   )}
-                  <Field
-                    label="账号名称"
-                    hint="例如 主账号"
-                    k="name"
-                    form={form}
-                    setForm={setForm}
-                  />
                   <Field
                     label="用户 ID"
                     hint="new-api userId"
                     k="userId"
                     form={form}
-                    setForm={setForm}
+                    error={errors.userId}
+                    update={updateField}
                   />
                   <Field
-                    label={modal.mode === "edit"
-                      ? "AccessToken（留空不修改）"
-                      : "AccessToken"}
-                    hint={modal.mode === "edit"
-                      ? "仅在令牌失效时重新粘贴"
-                      : "粘贴登录令牌"}
+                    label="AccessToken"
+                    hint="粘贴登录令牌"
                     k="accessToken"
+                    type="password"
                     form={form}
-                    setForm={setForm}
+                    error={errors.accessToken}
+                    update={updateField}
                   />
+                  <div class="field">
+                    <label>账号名称（可留空，自动获取）</label>
+                    <div class="token-row">
+                      <input
+                        class={`input${errors.name ? " input-err" : ""}`}
+                        placeholder={modal.mode === "create"
+                          ? "留空将自动获取用户名"
+                          : "留空则保持原名称"}
+                        value={form.name ?? ""}
+                        onInput={(e) =>
+                          updateField(
+                            "name",
+                            (e.target as HTMLInputElement).value,
+                          )}
+                      />
+                      <button
+                        type="button"
+                        class="btn btn-sm"
+                        disabled={probing}
+                        onClick={() =>
+                          modal.mode === "create"
+                            ? probeUsername()
+                            : probeUsernameEdit(modal.id)}
+                      >
+                        {probing ? "获取中…" : "自动获取"}
+                      </button>
+                    </div>
+                    {errors.name && (
+                      <span class="field-err">{errors.name}</span>
+                    )}
+                    <span class="hint">
+                      基于所属站点的 /api/user/self（username）自动补全
+                    </span>
+                  </div>
                 </>
               )}
               {modal.type === "apikey" && (
@@ -1034,13 +1254,13 @@ export default function UpstreamApp() {
                   <div class="field">
                     <label>所属账号</label>
                     <select
-                      class="select"
+                      class={`select${errors.accountId ? " input-err" : ""}`}
                       value={form.accountId ?? ""}
                       onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          accountId: (e.target as HTMLSelectElement).value,
-                        }))}
+                        updateField(
+                          "accountId",
+                          (e.target as HTMLSelectElement).value,
+                        )}
                     >
                       <option value="">选择账号…</option>
                       {accounts.map((a) => (
@@ -1049,20 +1269,25 @@ export default function UpstreamApp() {
                         </option>
                       ))}
                     </select>
+                    {errors.accountId && (
+                      <span class="field-err">{errors.accountId}</span>
+                    )}
                   </div>
                   <Field
                     label="Key 名称"
                     hint="例如 default"
                     k="name"
                     form={form}
-                    setForm={setForm}
+                    error={errors.name}
+                    update={updateField}
                   />
                   <Field
                     label="Key"
                     hint="sk-..."
                     k="key"
                     form={form}
-                    setForm={setForm}
+                    error={errors.key}
+                    update={updateField}
                   />
                 </>
               )}
@@ -1071,6 +1296,7 @@ export default function UpstreamApp() {
               <button
                 type="button"
                 class="btn"
+                disabled={saving}
                 onClick={() => setModal(null)}
               >
                 取消
@@ -1078,9 +1304,11 @@ export default function UpstreamApp() {
               <button
                 type="button"
                 class="btn btn-primary"
+                disabled={saving}
                 onClick={submitModal}
               >
-                保存
+                {saving && <span class="btn-spinner"></span>}
+                {saving ? "保存中…" : "保存"}
               </button>
             </div>
           </>
@@ -1138,26 +1366,27 @@ export default function UpstreamApp() {
 }
 
 function Field(
-  { label, hint, k, form, setForm }: {
+  { label, hint, k, form, error, type, update }: {
     label: string;
     hint: string;
     k: string;
     form: Record<string, string>;
-    setForm: (
-      fn: (f: Record<string, string>) => Record<string, string>,
-    ) => void;
+    error?: string;
+    type?: string;
+    update: (k: string, v: string) => void;
   },
 ): JSX.Element {
   return (
     <div class="field">
       <label>{label}</label>
       <input
-        class="input"
+        class={`input${error ? " input-err" : ""}`}
+        type={type ?? "text"}
         placeholder={hint}
         value={form[k] ?? ""}
-        onInput={(e) =>
-          setForm((f) => ({ ...f, [k]: (e.target as HTMLInputElement).value }))}
+        onInput={(e) => update(k, (e.target as HTMLInputElement).value)}
       />
+      {error && <span class="field-err">{error}</span>}
     </div>
   );
 }
