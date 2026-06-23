@@ -4,30 +4,6 @@ import { createSystemTaskLog } from "./system_task_log_service.ts";
 
 const adapter = new NewApiAdapter();
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;|&#0*39;|&#x0*27;/gi, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#(\d+);/g, (m, d) => {
-      try {
-        return String.fromCodePoint(Number(d));
-      } catch {
-        return m;
-      }
-    })
-    .replace(/&#x([0-9a-f]+);/gi, (m, h) => {
-      try {
-        return String.fromCodePoint(parseInt(h, 16));
-      } catch {
-        return m;
-      }
-    });
-}
-
 function hostOf(origin: string): string {
   try {
     return new URL(origin).host;
@@ -36,20 +12,20 @@ function hostOf(origin: string): string {
   }
 }
 
-/** 请求 origin 首页并解析 HTML `<title>`;失败或无标题返回 null。 */
-export async function fetchPageTitle(origin: string): Promise<string | null> {
+/** 请求 origin 的 /api/status,取 new-api 站点名称(data.system_name);失败返回 null。 */
+export async function fetchSystemName(origin: string): Promise<string | null> {
   try {
-    const res = await fetch(origin, {
+    const res = await fetch(`${origin.replace(/\/+$/, "")}/api/status`, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; TunTunShu/1.0)" },
       signal: AbortSignal.timeout(8000),
       redirect: "follow",
     });
     if (!res.ok) return null;
-    const html = await res.text();
-    const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    if (!m) return null;
-    const title = decodeEntities(m[1]).replace(/\s+/g, " ").trim();
-    return title || null;
+    const body = await res.json().catch(() => null) as
+      | { data?: { system_name?: unknown } }
+      | null;
+    const name = body?.data?.system_name;
+    return typeof name === "string" && name.trim() ? name.trim() : null;
   } catch {
     return null;
   }
@@ -61,10 +37,10 @@ export async function createSite(input: {
   remark?: string | null;
 }) {
   const sql = getSql();
-  // 站点名称非必填:留空时请求 origin 抓取网页 <title>,再退回域名。
+  // 站点名称非必填:留空时请求 origin/api/status 取 system_name,再退回域名。
   let name = (input.name ?? "").trim();
   if (!name) {
-    name = (await fetchPageTitle(input.origin)) ?? hostOf(input.origin);
+    name = (await fetchSystemName(input.origin)) ?? hostOf(input.origin);
   }
   const rows = await sql<{ id: number }[]>`
     insert into sites (name, origin, remark)

@@ -455,7 +455,7 @@ export default function UpstreamApp() {
     setModal({ mode: "edit", type: "account", id: a.id });
     setForm({ name: a.name, userId: a.user_id, accessToken: "" });
   }
-  /** 新建站点:请求后端抓取 origin 网页 <title> 自动补全站点名称。 */
+  /** 新建站点:请求后端读取 origin 的 /api/status(system_name)自动补全站点名称。 */
   async function probeTitle() {
     const origin = (form.origin ?? "").trim();
     if (!origin) {
@@ -464,19 +464,19 @@ export default function UpstreamApp() {
     }
     setProbing(true);
     try {
-      const r = await apiSend<{ title?: string | null }>(
+      const r = await apiSend<{ name?: string | null }>(
         "POST",
-        "/sites/probe-title",
+        "/sites/probe-name",
         { origin },
       );
-      if (r.title) {
-        setForm((f) => ({ ...f, name: r.title as string }));
-        showFlash(`已获取标题：${r.title}`, true);
+      if (r.name) {
+        setForm((f) => ({ ...f, name: r.name as string }));
+        showFlash(`已获取站点名称：${r.name}`, true);
       } else {
-        showFlash("未能获取到网页标题，请手动填写", false);
+        showFlash("未能获取站点名称，请手动填写", false);
       }
     } catch {
-      showFlash("获取标题失败", false);
+      showFlash("获取站点名称失败", false);
     } finally {
       setProbing(false);
     }
@@ -947,11 +947,11 @@ export default function UpstreamApp() {
                     setForm={setForm}
                   />
                   <div class="field">
-                    <label>站点名称（可留空，自动用网页标题）</label>
+                    <label>站点名称（可留空，自动取站点名称）</label>
                     <div class="token-row">
                       <input
                         class="input"
-                        placeholder="留空将自动抓取网页标题"
+                        placeholder="留空将自动获取站点名称"
                         value={form.name ?? ""}
                         onInput={(e) =>
                           setForm((f) => ({
@@ -969,7 +969,7 @@ export default function UpstreamApp() {
                       </button>
                     </div>
                     <span class="hint">
-                      基于 Origin 请求网页 &lt;title&gt; 自动补全
+                      基于 Origin 的 /api/status（system_name）自动补全
                     </span>
                   </div>
                   <Field
