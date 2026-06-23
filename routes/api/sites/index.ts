@@ -17,7 +17,13 @@ export const handler = define.handlers({
       { name?: string | null; origin: string; remark?: string | null }
     >(ctx.req);
     if (!body?.origin) return json({ error: "origin is required" }, 400);
-    const id = await createSite(body);
-    return json({ id });
+    const result = await createSite(body);
+    if (!result.ok) {
+      return json(
+        { error: "该站点 origin 已存在", id: result.existingId },
+        409,
+      );
+    }
+    return json({ id: result.id });
   },
 });

@@ -31,23 +31,59 @@ export async function fetchSystemName(origin: string): Promise<string | null> {
   }
 }
 
+export type CreateSiteResult =
+  | { ok: true; id: number }
+  | { ok: false; reason: "duplicate"; existingId: number };
+
+/** porsager/postgres 在唯一约束冲突时抛出 code=23505 的错误。 */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    (error as { code?: unknown }).code === "23505";
+}
+
 export async function createSite(input: {
   name?: string | null;
   origin: string;
   remark?: string | null;
-}) {
+}): Promise<CreateSiteResult> {
   const sql = getSql();
+  const origin = input.origin.replace(/\/+$/, "");
+
+  // 业务层查重:命中已有 origin 时返回 duplicate,避免撞唯一索引报 500。
+  const existing = await sql<{ id: number }[]>`
+    select id from sites where origin = ${origin} limit 1
+  `;
+  if (existing[0]) {
+    return { ok: false, reason: "duplicate", existingId: existing[0].id };
+  }
+
   // 站点名称非必填:留空时请求 origin/api/status 取 system_name,再退回域名。
   let name = (input.name ?? "").trim();
   if (!name) {
-    name = (await fetchSystemName(input.origin)) ?? hostOf(input.origin);
+    name = (await fetchSystemName(origin)) ?? hostOf(origin);
   }
-  const rows = await sql<{ id: number }[]>`
-    insert into sites (name, origin, remark)
-    values (${name}, ${input.origin}, ${input.remark ?? null})
-    returning id
-  `;
-  return rows[0]?.id ?? null;
+
+  try {
+    const rows = await sql<{ id: number }[]>`
+      insert into sites (name, origin, remark)
+      values (${name}, ${origin}, ${input.remark ?? null})
+      returning id
+    `;
+    const inserted = rows[0];
+    if (!inserted) throw new Error("createSite: insert 未返回新行");
+    return { ok: true, id: inserted.id };
+  } catch (error) {
+    // 并发兜底:两请求同时通过查重,只有一个 insert 成功,另一个撞唯一索引(23505)。
+    if (isUniqueViolation(error)) {
+      const dup = await sql<{ id: number }[]>`
+        select id from sites where origin = ${origin} limit 1
+      `;
+      if (dup[0]) {
+        return { ok: false, reason: "duplicate", existingId: dup[0].id };
+      }
+    }
+    throw error;
+  }
 }
 
 export async function listSites() {
