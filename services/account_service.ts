@@ -156,12 +156,15 @@ export async function syncAccountQuota(id: number) {
       : data;
     const quota = Number(payload.quota ?? 0);
     const usedQuota = Number(payload.used_quota ?? payload.usedQuota ?? 0);
-    const status = response.ok
+    // new-api 即使 access token 失效也返回 HTTP 200,业务成败在 body.success,
+    // 故不能只看 response.ok,否则 {"success":false,...} 会被误判为成功。
+    const ok = response.ok && data.success === true;
+    const status = ok
       ? quota === 0 ? "quota_empty" : "healthy"
       : "invalid";
     const logId = await createSystemTaskLog({
       taskType: "account_quota_sync",
-      status: response.ok ? "success" : "failed",
+      status: ok ? "success" : "failed",
       siteId: account.site_id,
       accountId: account.id,
       message: JSON.stringify(data).slice(0, 1000),
@@ -171,7 +174,7 @@ export async function syncAccountQuota(id: number) {
       set quota = ${quota}, used_quota = ${usedQuota}, status = ${status}, last_quota_sync_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
-    return { ok: response.ok, quota, usedQuota, status, data };
+    return { ok, quota, usedQuota, status, data };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const logId = await createSystemTaskLog({
@@ -212,9 +215,12 @@ export async function syncAccountApiKeys(id: number) {
       accessToken: account.access_token,
     });
     const data = await response.json().catch(() => ({})) as {
+      success?: boolean;
       data?: { items?: Array<{ id?: number; name?: string }> };
     };
-    const items = Array.isArray(data.data?.items) ? data.data.items : [];
+    // new-api 即使 access token 失效也返回 HTTP 200,业务成败在 body.success。
+    const ok = response.ok && data.success === true;
+    const items = ok && Array.isArray(data.data?.items) ? data.data.items : [];
     let synced = 0;
 
     for (const item of items) {
@@ -251,12 +257,12 @@ export async function syncAccountApiKeys(id: number) {
 
     await createSystemTaskLog({
       taskType: "account_api_key_sync",
-      status: response.ok ? "success" : "failed",
+      status: ok ? "success" : "failed",
       siteId: account.site_id,
       accountId: account.id,
       message: `api_keys=${synced}`,
     });
-    return { ok: response.ok, count: synced };
+    return { ok, count: synced };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await createSystemTaskLog({
