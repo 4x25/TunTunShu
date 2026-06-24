@@ -402,10 +402,16 @@ export default function UpstreamApp() {
         "POST",
         `/accounts/${a.id}/checkin`,
       );
-      return `「${a.name}」签到：${
+      const checkinMsg = `「${a.name}」签到：${
         CHECKIN_MAP[r.checkinStatus ?? "unknown"]?.[1] ?? r.checkinStatus ??
           r.error ?? "?"
       }`;
+      // 签到后顺带刷新额度。best-effort,失败不影响签到结果。
+      const quota = await apiSend<{ ok?: boolean }>(
+        "POST",
+        `/accounts/${a.id}/sync-quota`,
+      ).catch(() => null);
+      return `${checkinMsg} · ${quota?.ok ? "额度已更新" : "额度刷新失败"}`;
     });
   const syncKeys = (a: Account) =>
     act("sk" + a.id, async () => {
