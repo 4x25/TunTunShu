@@ -2,7 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import { IconClose, IconSearch } from "../components/icons.tsx";
 import { Modal } from "../components/Modal.tsx";
-import { apiGet, apiSend } from "../components/admin_api.ts";
+import { apiGet, apiSend, getToken } from "../components/admin_api.ts";
 
 interface Site {
   id: string;
@@ -606,19 +606,25 @@ export default function UpstreamApp() {
         | null = null;
       let syncAcct: string | null = null; // 账号创建/编辑后待拉取额度+APIKey 的账号 id
       let checkSite: string | null = null; // 站点创建/编辑后待检测连通性的站点 id
+      let updatedExisting = false; // 后端 upsert 命中已有记录(更新而非新建)
       if (modal.mode === "create") {
         if (modal.type === "site") {
-          const r = await apiSend<{ id?: string | number }>("POST", "/sites", {
-            name: form.name?.trim() || null,
-            origin: form.origin,
-            remark: form.remark || null,
-          });
+          const r = await apiSend<{ id?: string | number; updated?: boolean }>(
+            "POST",
+            "/sites",
+            {
+              name: form.name?.trim() || null,
+              origin: form.origin,
+              remark: form.remark || null,
+            },
+          );
+          updatedExisting = !!r?.updated;
           if (r?.id != null) {
             next = { site: String(r.id), account: null, key: null };
             checkSite = String(r.id);
           }
         } else if (modal.type === "account") {
-          const r = await apiSend<{ id?: string | number }>(
+          const r = await apiSend<{ id?: string | number; updated?: boolean }>(
             "POST",
             "/accounts",
             {
@@ -628,6 +634,7 @@ export default function UpstreamApp() {
               accessToken: form.accessToken,
             },
           );
+          updatedExisting = !!r?.updated;
           if (r?.id != null) {
             next = { site: form.siteId, account: String(r.id), key: null };
             syncAcct = String(r.id);
@@ -667,7 +674,12 @@ export default function UpstreamApp() {
       await load();
       if (next) setSel(next);
       setModal(null);
-      showFlash(modal.mode === "create" ? "创建成功" : "已保存", true);
+      showFlash(
+        modal.mode === "create"
+          ? (updatedExisting ? "该记录已存在，已更新" : "创建成功")
+          : "已保存",
+        true,
+      );
       // 账号创建/编辑后立即拉取其额度与 APIKey(后台进行,不阻塞弹窗关闭)
       if (syncAcct) void syncAccountInfo(syncAcct);
       // 站点创建/编辑后自动检测连通性(后台进行)
@@ -777,6 +789,19 @@ export default function UpstreamApp() {
           </button>
           <button type="button" class="btn btn-ghost btn-sm" onClick={resetAll}>
             清除筛选
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            title="安装油猴脚本,在 new-api 站点一键录入站点与账号"
+            onClick={() => {
+              const url = `/tuntunshu.user.js?key=${
+                encodeURIComponent(getToken())
+              }`;
+              globalThis.open(url, "_blank");
+            }}
+          >
+            快捷录入
           </button>
         </div>
       </div>

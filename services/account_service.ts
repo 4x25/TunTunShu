@@ -1,6 +1,7 @@
 import { getSql } from "../db/client.ts";
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
+import { isUniqueViolation } from "./site_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
 
 const adapter = new NewApiAdapter();
@@ -29,13 +30,34 @@ export async function fetchUsername(
   }
 }
 
+/** upsert 结果:updated=true 表示命中 (site_id, user_id) 唯一键、就地更新了已有账号。 */
+export type CreateAccountResult = { id: number; updated: boolean };
+
 export async function createAccount(input: {
   siteId: number;
   name?: string | null;
   userId: string;
   accessToken: string;
-}) {
+}): Promise<CreateAccountResult> {
   const sql = getSql();
+
+  // 命中已有 (site_id, user_id) 时就地更新:token 必更新、name 有才覆盖。
+  const mergeUpdate = async (id: number): Promise<CreateAccountResult> => {
+    await updateAccount(id, {
+      accessToken: input.accessToken,
+      name: input.name?.trim() || undefined,
+    });
+    return { id, updated: true };
+  };
+
+  // 查重前置:命中即更新,省去对已存在账号还白白发起 /api/user/self 取名。
+  const existing = await sql<{ id: number }[]>`
+    select id from accounts
+    where site_id = ${input.siteId} and user_id = ${input.userId}
+    limit 1
+  `;
+  if (existing[0]) return await mergeUpdate(existing[0].id);
+
   // 账号名称非必填:留空时取 origin/api/user/self 的 username,再退回 userId。
   let name = input.name?.trim() || null;
   if (!name) {
@@ -51,12 +73,27 @@ export async function createAccount(input: {
     }
     name = name || input.userId;
   }
-  const rows = await sql<{ id: number }[]>`
-    insert into accounts (site_id, name, user_id, access_token)
-    values (${input.siteId}, ${name}, ${input.userId}, ${input.accessToken})
-    returning id
-  `;
-  return rows[0]?.id ?? null;
+  try {
+    const rows = await sql<{ id: number }[]>`
+      insert into accounts (site_id, name, user_id, access_token)
+      values (${input.siteId}, ${name}, ${input.userId}, ${input.accessToken})
+      returning id
+    `;
+    const inserted = rows[0];
+    if (!inserted) throw new Error("createAccount: insert 未返回新行");
+    return { id: inserted.id, updated: false };
+  } catch (error) {
+    // 并发兜底:两请求同时通过查重,撞唯一索引(23505)→ 改走更新。
+    if (isUniqueViolation(error)) {
+      const dup = await sql<{ id: number }[]>`
+        select id from accounts
+        where site_id = ${input.siteId} and user_id = ${input.userId}
+        limit 1
+      `;
+      if (dup[0]) return await mergeUpdate(dup[0].id);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -159,9 +196,7 @@ export async function syncAccountQuota(id: number) {
     // new-api 即使 access token 失效也返回 HTTP 200,业务成败在 body.success,
     // 故不能只看 response.ok,否则 {"success":false,...} 会被误判为成功。
     const ok = response.ok && data.success === true;
-    const status = ok
-      ? quota === 0 ? "quota_empty" : "healthy"
-      : "invalid";
+    const status = ok ? quota === 0 ? "quota_empty" : "healthy" : "invalid";
     const logId = await createSystemTaskLog({
       taskType: "account_quota_sync",
       status: ok ? "success" : "failed",

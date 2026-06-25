@@ -1,6 +1,7 @@
 import { App, staticFiles } from "fresh";
 import { define, type State } from "./utils.ts";
 import { initializeDatabase } from "./db/init.ts";
+import { buildUserScript } from "./lib/userscript.ts";
 import { getSettings } from "./services/settings_service.ts";
 import { runAccountCheckinJob } from "./jobs/account_checkin_job.ts";
 import { runAccountQuotaSyncJob } from "./jobs/account_quota_sync_job.ts";
@@ -11,7 +12,29 @@ import { runSiteHealthCheckJob } from "./jobs/site_health_check_job.ts";
 export const app = new App<State>();
 
 app.use(staticFiles());
-app.use(define.middleware((ctx) => ctx.next()));
+
+// 服务油猴脚本:GET /tuntunshu.user.js 注入对外 base URL 与 ?key= 后返回。
+// 该路由无鉴权,故只嵌入调用方传入的 key(后台「快捷录入」按钮带当前登录密钥);
+// 缺失/错误的 key 安装出的脚本调 API 时 401,由脚本提示重新安装。
+app.use(define.middleware((ctx) => {
+  const url = new URL(ctx.req.url);
+  if (ctx.req.method === "GET" && url.pathname === "/tuntunshu.user.js") {
+    const proto = ctx.req.headers.get("x-forwarded-proto") ??
+      url.protocol.replace(":", "");
+    const host = ctx.req.headers.get("x-forwarded-host") ?? url.host;
+    const authKey = url.searchParams.get("key") ?? "";
+    return new Response(
+      buildUserScript({ baseUrl: `${proto}://${host}`, authKey }),
+      {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "no-cache",
+        },
+      },
+    );
+  }
+  return ctx.next();
+}));
 
 await initializeDatabase();
 

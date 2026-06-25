@@ -31,12 +31,11 @@ export async function fetchSystemName(origin: string): Promise<string | null> {
   }
 }
 
-export type CreateSiteResult =
-  | { ok: true; id: number }
-  | { ok: false; reason: "duplicate"; existingId: number };
+/** upsert 结果:updated=true 表示命中唯一键、就地更新了已有行。 */
+export type CreateSiteResult = { id: number; updated: boolean };
 
 /** porsager/postgres 在唯一约束冲突时抛出 code=23505 的错误。 */
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error &&
     (error as { code?: unknown }).code === "23505";
 }
@@ -49,13 +48,20 @@ export async function createSite(input: {
   const sql = getSql();
   const origin = input.origin.replace(/\/+$/, "");
 
-  // 业务层查重:命中已有 origin 时返回 duplicate,避免撞唯一索引报 500。
+  // 命中已有 origin 时就地更新(只覆盖传入的非空字段,空串/缺省保持原值),否则插入新行。
+  const mergeUpdate = async (id: number): Promise<CreateSiteResult> => {
+    await updateSite(id, {
+      name: input.name?.trim() || undefined,
+      remark: input.remark?.trim() || undefined,
+    });
+    return { id, updated: true };
+  };
+
+  // 业务层查重:命中已有 origin 走更新分支,避免撞唯一索引报 500。
   const existing = await sql<{ id: number }[]>`
     select id from sites where origin = ${origin} limit 1
   `;
-  if (existing[0]) {
-    return { ok: false, reason: "duplicate", existingId: existing[0].id };
-  }
+  if (existing[0]) return await mergeUpdate(existing[0].id);
 
   // 站点名称非必填:留空时请求 origin/api/status 取 system_name,再退回域名。
   let name = (input.name ?? "").trim();
@@ -71,16 +77,14 @@ export async function createSite(input: {
     `;
     const inserted = rows[0];
     if (!inserted) throw new Error("createSite: insert 未返回新行");
-    return { ok: true, id: inserted.id };
+    return { id: inserted.id, updated: false };
   } catch (error) {
-    // 并发兜底:两请求同时通过查重,只有一个 insert 成功,另一个撞唯一索引(23505)。
+    // 并发兜底:两请求同时通过查重,只有一个 insert 成功,另一个撞唯一索引(23505)→ 改走更新。
     if (isUniqueViolation(error)) {
       const dup = await sql<{ id: number }[]>`
         select id from sites where origin = ${origin} limit 1
       `;
-      if (dup[0]) {
-        return { ok: false, reason: "duplicate", existingId: dup[0].id };
-      }
+      if (dup[0]) return await mergeUpdate(dup[0].id);
     }
     throw error;
   }
