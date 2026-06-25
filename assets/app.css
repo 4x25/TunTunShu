@@ -1792,22 +1792,16 @@ button:focus-visible,
 .mrow .l1 .sw-wrap {
   flex: none;
 }
-/* 标题前的「定位」小图标按钮:比 .icon-btn 更小,沿用 ghost/muted 视觉 */
+/* 标题前的「定位」按钮:复用 .icon-btn,仅覆盖尺寸/对齐与 hover 强调色 */
 .mrow .l1 .loc-btn {
   flex: none;
-  display: inline-grid;
-  place-items: center;
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  border: 1px solid transparent;
-  color: var(--muted);
-  background: transparent;
   cursor: pointer;
 }
 .mrow .l1 .loc-btn:hover {
   color: var(--accent);
-  background: var(--fg-soft);
 }
 .mrow .l1 .loc-btn svg {
   width: 14px;
