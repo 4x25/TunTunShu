@@ -1,5 +1,6 @@
 import { App, staticFiles } from "fresh";
 import { define, type State } from "./utils.ts";
+import { upstreamProxyMiddleware } from "./middleware/upstream_proxy.ts";
 import { initializeDatabase } from "./db/init.ts";
 import { getSettings } from "./services/settings_service.ts";
 import { runAccountCheckinJob } from "./jobs/account_checkin_job.ts";
@@ -10,6 +11,9 @@ import { runSiteHealthCheckJob } from "./jobs/site_health_check_job.ts";
 
 export const app = new App<State>();
 
+// 须先于 staticFiles():带 X-TTS-Proxy 头的代理请求(/static、/api 等)需先于本应用的
+// 静态服务与路由被拦下转发,避免被同名路径遮蔽。
+app.use(upstreamProxyMiddleware);
 app.use(staticFiles());
 app.use(define.middleware((ctx) => ctx.next()));
 

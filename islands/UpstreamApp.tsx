@@ -396,6 +396,22 @@ export default function UpstreamApp() {
         r.httpStatus ? ` (HTTP ${r.httpStatus})` : ""
       }`;
     });
+  // 免登录打开上游后台:先同步开空白标签(规避弹窗拦截),拿到 ticket 后再导航。
+  const loginAccount = async (a: Account) => {
+    const w = globalThis.open("about:blank", "_blank");
+    try {
+      const { ticket } = await apiSend<{ ticket: string }>(
+        "POST",
+        `/accounts/${a.id}/login-ticket`,
+      );
+      const href = `/up/start?ticket=${encodeURIComponent(ticket)}`;
+      if (w) w.location.href = href;
+      else globalThis.open(href, "_blank");
+    } catch (e) {
+      w?.close();
+      showFlash(e instanceof Error ? e.message : "打开失败", false);
+    }
+  };
   const checkin = (a: Account) =>
     act("ci" + a.id, async () => {
       const r = await apiSend<{ checkinStatus?: string; error?: string }>(
@@ -906,6 +922,7 @@ export default function UpstreamApp() {
                       {usd(a.quota).toFixed(2)}
                     </RowSub>
                     <RowActions>
+                      <ActBtn onClick={() => loginAccount(a)}>登录</ActBtn>
                       <ActBtn
                         tone={ciTone}
                         title={checkinMsg[a.id] || undefined}
