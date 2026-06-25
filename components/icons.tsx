@@ -25,6 +25,15 @@ export function IconSearch(props: IconProps) {
   );
 }
 
+export function IconLocate(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" {...STROKE} class={props.class}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+    </svg>
+  );
+}
+
 export function IconLogout(props: IconProps) {
   return (
     <svg viewBox="0 0 24 24" {...STROKE} class={props.class}>
