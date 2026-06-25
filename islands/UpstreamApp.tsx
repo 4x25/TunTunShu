@@ -272,26 +272,6 @@ export default function UpstreamApp() {
     };
   }, []);
 
-  // 账号 / APIKey 列表只有一项时自动选中(基于上级过滤,忽略搜索框)
-  useEffect(() => {
-    const list = sel.site == null
-      ? accounts
-      : accounts.filter((a) => a.site_id === sel.site);
-    if (list.length === 1) {
-      setSel((p) =>
-        p.account == null ? { ...p, account: list[0].id, key: null } : p
-      );
-    }
-  }, [accounts, sel.site]);
-  useEffect(() => {
-    const list = sel.account == null
-      ? keys
-      : keys.filter((k) => k.account_id === sel.account);
-    if (list.length === 1) {
-      setSel((p) => p.key == null ? { ...p, key: list[0].id } : p);
-    }
-  }, [keys, sel.account]);
-
   function showFlash(text: string, ok: boolean) {
     setFlash({ text, ok });
     setTimeout(() => setFlash(null), 4000);
@@ -344,23 +324,49 @@ export default function UpstreamApp() {
     setQMod("");
   }
 
+  // ── 逐级级联过滤 ────────────────────────────────────────────────────
+  // 每列候选 = 上级选中项的子集;上级未选中时 = 上级当前整列的并集。
   const siteRows = sites.filter((s) => hit(s.name + " " + s.origin, qSite));
+
+  const accParent = sel.site != null
+    ? new Set([sel.site])
+    : new Set(siteRows.map((s) => s.id));
   const accRows = accounts.filter((a) =>
-    (sel.site == null || a.site_id === sel.site) &&
-    hit(a.name + " " + a.user_id, qAcc)
+    accParent.has(a.site_id) && hit(a.name + " " + a.user_id, qAcc)
   );
+
+  const keyParent = sel.account != null
+    ? new Set([sel.account])
+    : new Set(accRows.map((a) => a.id));
   const keyRows = keys.filter((k) =>
-    (sel.account == null || k.account_id === sel.account) &&
-    hit(k.name + " " + k.key, qKey)
+    keyParent.has(k.account_id) && hit(k.name + " " + k.key, qKey)
   );
+
+  const modParent = sel.key != null
+    ? new Set([sel.key])
+    : new Set(keyRows.map((k) => k.id));
   const modRows = ums.filter((m) => {
     const mapped = m.model_id
       ? models.find((x) => x.id === m.model_id)?.name ?? ""
       : "";
-    return (sel.key == null || m.api_key_id === sel.key) &&
-      hit(m.name + " " + mapped, qMod);
+    return modParent.has(m.api_key_id) && hit(m.name + " " + mapped, qMod);
   });
   const ddItems = models.filter((m) => hit(m.name, ddFilter));
+
+  // 某列恰好一项 → 直接落实到 sel(渲染期写入,sel 始终是唯一真相)。Preact 经
+  // enqueueRender 走微任务:在本次提交后、浏览器绘制前收敛重渲染,故首帧即正确、
+  // 无列表突变/闪烁。只填补未选中的层级、绝不清除已选,最多一两帧即收敛、不反复。
+  const want = {
+    site: sel.site ?? (siteRows.length === 1 ? siteRows[0].id : null),
+    account: sel.account ?? (accRows.length === 1 ? accRows[0].id : null),
+    key: sel.key ?? (keyRows.length === 1 ? keyRows[0].id : null),
+  };
+  if (
+    want.site !== sel.site || want.account !== sel.account ||
+    want.key !== sel.key
+  ) {
+    setSel(want);
+  }
 
   // ── 动作 ──────────────────────────────────────────────────────────
   const toggleSite = (s: Site) =>
@@ -656,6 +662,10 @@ export default function UpstreamApp() {
           remark: form.remark || null,
         });
         checkSite = modal.id;
+        // 选中被编辑站点:仍在该站点路径上则保留下钻,否则重置子级
+        next = sel.site === modal.id
+          ? { site: modal.id, account: sel.account, key: sel.key }
+          : { site: modal.id, account: null, key: null };
       } else {
         const payload: Record<string, unknown> = { userId: form.userId };
         const nm = form.name?.trim();
@@ -663,6 +673,13 @@ export default function UpstreamApp() {
         if (form.accessToken) payload.accessToken = form.accessToken;
         await apiSend("PATCH", `/accounts/${modal.id}`, payload);
         syncAcct = modal.id;
+        // 选中被编辑账号(连同所属站点);非当前账号则重置其下 Key
+        const acc = accounts.find((a) => a.id === modal.id);
+        next = {
+          site: acc?.site_id ?? sel.site,
+          account: modal.id,
+          key: sel.account === modal.id ? sel.key : null,
+        };
       }
       await load();
       if (next) setSel(next);
