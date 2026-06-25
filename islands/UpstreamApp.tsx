@@ -353,13 +353,21 @@ export default function UpstreamApp() {
   });
   const ddItems = models.filter((m) => hit(m.name, ddFilter));
 
-  // 某列恰好一项 → 直接落实到 sel(渲染期写入,sel 始终是唯一真相)。Preact 经
-  // enqueueRender 走微任务:在本次提交后、浏览器绘制前收敛重渲染,故首帧即正确、
-  // 无列表突变/闪烁。只填补未选中的层级、绝不清除已选,最多一两帧即收敛、不反复。
+  // 某列恰好一项 → 落实到 sel(渲染期写入,sel 始终是唯一真相)。Preact 的
+  // enqueueRender 走微任务,在提交后、绘制前同一拍收敛重渲染,故首帧即正确、无闪烁。
+  // 候选数按「上级选中」级联,但**忽略各列搜索框**(用 *Pool 而非用于渲染的
+  // *Rows):否则在搜索框里把列表筛成一项时会被强制选中且无法取消。
+  // 只填补未选中的层级、绝不清除已选,最多两三帧即收敛、不反复。
+  const accPool = sel.site != null
+    ? accounts.filter((a) => a.site_id === sel.site)
+    : accounts;
+  const keyPool = sel.account != null
+    ? keys.filter((k) => k.account_id === sel.account)
+    : keys;
   const want = {
-    site: sel.site ?? (siteRows.length === 1 ? siteRows[0].id : null),
-    account: sel.account ?? (accRows.length === 1 ? accRows[0].id : null),
-    key: sel.key ?? (keyRows.length === 1 ? keyRows[0].id : null),
+    site: sel.site ?? (sites.length === 1 ? sites[0].id : null),
+    account: sel.account ?? (accPool.length === 1 ? accPool[0].id : null),
+    key: sel.key ?? (keyPool.length === 1 ? keyPool[0].id : null),
   };
   if (
     want.site !== sel.site || want.account !== sel.account ||
