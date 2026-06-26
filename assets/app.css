@@ -1792,6 +1792,21 @@ button:focus-visible,
 .mrow .l1 .sw-wrap {
   flex: none;
 }
+/* 标题前的「定位」按钮:复用 .icon-btn,仅覆盖尺寸/对齐与 hover 强调色 */
+.mrow .l1 .loc-btn {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mrow .l1 .loc-btn:hover {
+  color: var(--accent);
+}
+.mrow .l1 .loc-btn svg {
+  width: 14px;
+  height: 14px;
+}
 .mrow .nm {
   font-weight: 600;
   font-size: 13px;

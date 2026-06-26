@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
-import { IconClose, IconSearch } from "../components/icons.tsx";
+import { IconClose, IconLocate, IconSearch } from "../components/icons.tsx";
 import { Modal } from "../components/Modal.tsx";
 import { apiGet, apiSend, getToken } from "../components/admin_api.ts";
 
@@ -114,15 +114,30 @@ function MillerRow(
 }
 /** 行首(l1):名称 + 状态徽标 + 启停开关。 */
 function RowHead(
-  { name, status, on, onToggle }: {
+  { name, status, on, onToggle, onLocate }: {
     name: string;
     status: string;
     on: boolean;
     onToggle: () => void;
+    onLocate?: () => void;
   },
 ) {
   return (
     <div class="l1">
+      {onLocate && (
+        <button
+          type="button"
+          class="icon-btn loc-btn"
+          title="定位"
+          aria-label="定位"
+          onClick={(e) => {
+            e.stopPropagation();
+            onLocate();
+          }}
+        >
+          <IconLocate />
+        </button>
+      )}
       <span class="nm">{name}</span>
       <Pill status={status} />
       <Switch on={on} onChange={onToggle} />
@@ -200,6 +215,8 @@ export default function UpstreamApp() {
 
   const [openDd, setOpenDd] = useState<string | null>(null);
   const [ddFilter, setDdFilter] = useState("");
+  // 「定位」触发滚动的信号(自增):仅定位会改它,普通点击选中不会。
+  const [locateTick, setLocateTick] = useState(0);
 
   const [modal, setModal] = useState<ModalSpec | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
@@ -292,6 +309,22 @@ export default function UpstreamApp() {
     }
   }, [keys, sel.account]);
 
+  // 仅在「定位」后:把各列被选中的行滚到该列视口的垂直中央,
+  // 一眼看清整条链路(站点/账号/APIKey)。普通点击选中不滚动。
+  useEffect(() => {
+    if (!locateTick) return;
+    document.querySelectorAll<HTMLElement>(".mcol-body").forEach((body) => {
+      const row = body.querySelector<HTMLElement>(".mrow.sel");
+      if (!row) return;
+      const bRect = body.getBoundingClientRect();
+      const rRect = row.getBoundingClientRect();
+      const delta = (rRect.top - bRect.top) -
+        (body.clientHeight - row.clientHeight) / 2;
+      if (Math.abs(delta) < 1) return; // 已基本居中,免抖动
+      body.scrollTo({ top: body.scrollTop + delta, behavior: "smooth" });
+    });
+  }, [locateTick]);
+
   function showFlash(text: string, ok: boolean) {
     setFlash({ text, ok });
     setTimeout(() => setFlash(null), 4000);
@@ -335,6 +368,31 @@ export default function UpstreamApp() {
   }
   function pickKey(id: string) {
     setSel((s) => ({ ...s, key: s.key === id ? null : id }));
+  }
+  // 「定位」:向上级联选中被点击项的所有上级(站点→账号→APIKey),
+  // 让该项在层级中的归属一目了然。被点击项自身不选中。
+  // locateTo 统一「设选中 + 触发滚动」,新增定位入口时不会漏掉滚动信号。
+  function locateTo(
+    next: { site: string | null; account: string | null; key: string | null },
+  ) {
+    setSel(next);
+    setLocateTick((n) => n + 1);
+  }
+  function locateAccount(a: Account) {
+    locateTo({ site: a.site_id, account: null, key: null });
+  }
+  function locateKey(k: ApiKey) {
+    const acc = accounts.find((x) => x.id === k.account_id);
+    locateTo({ site: acc?.site_id ?? null, account: k.account_id, key: null });
+  }
+  function locateModel(m: UpstreamModel) {
+    const k = keys.find((x) => x.id === m.api_key_id);
+    const acc = k ? accounts.find((x) => x.id === k.account_id) : undefined;
+    locateTo({
+      site: acc?.site_id ?? null,
+      account: k?.account_id ?? null,
+      key: m.api_key_id,
+    });
   }
   function resetAll() {
     setSel({ site: null, account: null, key: null });
@@ -925,6 +983,7 @@ export default function UpstreamApp() {
                       status={a.status}
                       on={a.enabled}
                       onToggle={() => toggleAcc(a)}
+                      onLocate={() => locateAccount(a)}
                     />
                     <RowSub>
                       {a.user_id} · 余 ${usd(String(q - u)).toFixed(2)} / $
@@ -1001,6 +1060,7 @@ export default function UpstreamApp() {
                     status={k.status}
                     on={k.enabled}
                     onToggle={() => toggleKey(k)}
+                    onLocate={() => locateKey(k)}
                   />
                   <RowSub>{maskKey(k.key)}</RowSub>
                   <RowActions>
@@ -1056,6 +1116,7 @@ export default function UpstreamApp() {
                       status={m.status}
                       on={m.enabled}
                       onToggle={() => toggleUm(m)}
+                      onLocate={() => locateModel(m)}
                     />
                     <div class={`dd${openDd === m.id ? " open" : ""}`}>
                       <button
