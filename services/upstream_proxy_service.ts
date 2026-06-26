@@ -42,7 +42,7 @@ export async function getAccountForProxy(
   };
 }
 
-/** 注入到 <head> 首位的脚本:预置登录态(过 _authenticated 守卫)+ 添加「退出代理」浮动按钮。
+/** 注入到 <head> 首位的脚本:预置登录态(过 _authenticated 守卫)。
  *  SW 方案下无需 URL 改写垫片——所有请求由 SW 拦截并打标转发。 */
 function buildInject(account: ProxyAccount): string {
   // 最小合法 user,role=100 让管理菜单先显示;守卫随后调 /api/user/self 用真实数据覆盖。
@@ -53,21 +53,11 @@ function buildInject(account: ProxyAccount): string {
     status: 1,
   }));
   const uidJson = JSON.stringify(String(account.userId));
-  return `<script>(function(){
-  try{localStorage.setItem('user',${userJson});localStorage.setItem('uid',${uidJson});sessionStorage.setItem('ttsup','1');}catch(e){}
-  function addExit(){
-    if(document.getElementById('__tts_exit'))return;
-    var b=document.createElement('button');
-    b.id='__tts_exit';b.textContent='退出代理';
-    b.style.cssText='position:fixed;right:12px;bottom:12px;z-index:2147483647;padding:6px 12px;background:#ef4444;color:#fff;border:none;border-radius:6px;font:13px sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25)';
-    b.onclick=function(){try{sessionStorage.removeItem('ttsup');}catch(e){}location.href='/upstream?__ttsexit=1';};
-    (document.body||document.documentElement).appendChild(b);
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addExit);else addExit();
-})();</script>`;
+  // 退出由前端弹窗(mockup-browser 的关闭按钮)负责,无需在页面内注入退出按钮。
+  return `<script>(function(){try{localStorage.setItem('user',${userJson});localStorage.setItem('uid',${uidJson});}catch(e){}})();</script>`;
 }
 
-/** 在上游 HTML 中注入登录态 seed + 退出按钮,并去掉 CSP <meta>。 */
+/** 在上游 HTML 中注入登录态 seed,并去掉 CSP <meta>。 */
 function injectIntoHtml(html: string, account: ProxyAccount): string {
   html = html.replace(
     /<meta[^>]+http-equiv=["']content-security-policy["'][^>]*>/gi,
@@ -108,6 +98,7 @@ const STRIP_RESPONSE = new Set([
   "content-length",
   "content-security-policy", // 否则注入的内联脚本被拦
   "content-security-policy-report-only",
+  "x-frame-options", // 否则上游若设了它会阻止我方 iframe 内嵌
 ]);
 
 /** 把请求反代到上游同名路径,注入凭据与登录态,HTML 注入、其余流式直通。 */

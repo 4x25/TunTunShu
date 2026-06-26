@@ -205,6 +205,10 @@ export default function UpstreamApp() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [nmFor, setNmFor] = useState<string | null>(null); // upstream model id
   const [nmName, setNmName] = useState("");
+  // 上游后台代理弹窗(iframe);null = 关闭。
+  const [proxy, setProxy] = useState<
+    { src: string; url: string; name: string } | null
+  >(null);
   // accountId → 最近一次签到日志信息(签到失败时 hover 显示原因)
   const [checkinMsg, setCheckinMsg] = useState<Record<string, string>>({});
   const [probing, setProbing] = useState(false); // 抓取网页标题中
@@ -262,6 +266,7 @@ export default function UpstreamApp() {
         setOpenDd(null);
         setModal(null);
         setNmFor(null);
+        setProxy(null);
       }
     };
     document.addEventListener("click", onClick);
@@ -271,6 +276,14 @@ export default function UpstreamApp() {
       document.removeEventListener("keydown", onKey);
     };
   }, []);
+
+  // 代理弹窗关闭(proxy 变为 null)时,通知 SW 注销会话(best-effort)。
+  useEffect(() => {
+    if (proxy) return;
+    navigator.serviceWorker?.getRegistration()
+      .then((r) => r?.active?.postMessage({ type: "deactivate" }))
+      .catch(() => {});
+  }, [proxy]);
 
   // 账号 / APIKey 列表只有一项时自动选中(基于上级过滤,忽略搜索框)
   useEffect(() => {
@@ -396,22 +409,24 @@ export default function UpstreamApp() {
         r.httpStatus ? ` (HTTP ${r.httpStatus})` : ""
       }`;
     });
-  // 免登录打开上游后台:先同步开空白标签(规避弹窗拦截),拿到 ticket 后再导航。
+  // 免登录在弹窗 iframe(daisyUI mockup-browser)中打开上游后台。
   const loginAccount = async (a: Account) => {
-    const w = globalThis.open("about:blank", "_blank");
     try {
       const { ticket } = await apiSend<{ ticket: string }>(
         "POST",
         `/accounts/${a.id}/login-ticket`,
       );
-      const href = `/up/start?ticket=${encodeURIComponent(ticket)}`;
-      if (w) w.location.href = href;
-      else globalThis.open(href, "_blank");
+      const url = sites.find((s) => s.id === a.site_id)?.origin ?? "";
+      setProxy({
+        src: `/up/start?ticket=${encodeURIComponent(ticket)}`,
+        url,
+        name: a.name,
+      });
     } catch (e) {
-      w?.close();
       showFlash(e instanceof Error ? e.message : "打开失败", false);
     }
   };
+  const closeProxy = () => setProxy(null);
   const checkin = (a: Account) =>
     act("ci" + a.id, async () => {
       const r = await apiSend<{ checkinStatus?: string; error?: string }>(
@@ -1384,6 +1399,47 @@ export default function UpstreamApp() {
           </>
         )}
       </Modal>
+
+      {/* 上游后台代理弹窗:daisyUI mockup-browser 外观,内嵌免登录 iframe */}
+      {proxy && (
+        <div
+          class="modal-mask on"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeProxy();
+          }}
+        >
+          <div
+            class="mockup-browser"
+            style="position:relative;width:min(1320px,96vw);height:92vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow-pop)"
+          >
+            <button
+              type="button"
+              class="icon-btn"
+              onClick={closeProxy}
+              aria-label="关闭"
+              style="position:absolute;top:7px;right:10px;z-index:3"
+            >
+              <IconClose />
+            </button>
+            <div class="mockup-browser-toolbar" style="padding-right:48px">
+              <div
+                class="input"
+                style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                title={proxy.url}
+              >
+                {proxy.url || proxy.name}
+              </div>
+            </div>
+            <div style="flex:1;min-height:0;border-top:1px solid var(--border)">
+              <iframe
+                title={`上游后台 · ${proxy.name}`}
+                src={proxy.src}
+                style="width:100%;height:100%;border:0;display:block;background:#fff"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
