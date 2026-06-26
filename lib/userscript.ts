@@ -33,7 +33,7 @@ export function buildUserScript(
   return `// ==UserScript==
 // @name         囤囤鼠 · 快捷录入
 // @namespace    tuntunshu
-// @version      1.3.0
+// @version      1.3.1
 // @description  在 new-api 站点一键录入站点与账号到囤囤鼠
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -272,18 +272,23 @@ export function buildUserScript(
   }
 
   // 保存成功后,调囤囤鼠账号签到接口(POST /api/accounts/:id/checkin)签到一次,
-  // 顺带验证保存的令牌可用。返回值见 checkinAccount:ok=true 为签到成功(含今日已签),
-  // manual_required 为需人机验证。尽力而为:任何失败都归一化为提示文案并 resolve,
-  // 不 reject(不影响录入成功结果)。
+  // 顺带验证保存的令牌可用。返回展示文案:签到成功 / 签到需验证 / 签到失败(尽量带原因)。
+  // 失败原因优先级:后端归一化 message(checkinAccount)→ 异常 error → HTTP 状态。
+  // 尽力而为:任何失败都归一化为文案并 resolve,不 reject(不影响录入成功结果)。
   function tryCheckin(accountId) {
     return tts("POST", "/api/accounts/" + accountId + "/checkin")
       .then(function (r) {
-        if (r.status < 200 || r.status >= 300) return "签到失败";
         var j = r.json;
-        if (!j) return "签到失败";
-        if (j.ok) return "签到成功";
-        if (j.checkinStatus === "manual_required") return "签到需验证";
-        return "签到失败";
+        if (r.status >= 200 && r.status < 300 && j) {
+          if (j.ok) return "签到成功";
+          if (j.checkinStatus === "manual_required") return "签到需验证";
+        }
+        var reason = (j && (j.message || j.error)) || "";
+        if (!reason && (r.status < 200 || r.status >= 300)) {
+          reason = "HTTP " + r.status;
+        }
+        reason = reason ? String(reason).slice(0, 80) : "";
+        return reason ? ("签到失败:" + reason) : "签到失败";
       })
       .catch(function () { return "签到失败"; });
   }
