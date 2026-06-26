@@ -1,6 +1,7 @@
 import { getSql } from "../db/client.ts";
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
+import { syncApiKeyModels } from "./api_key_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
 
 const adapter = new NewApiAdapter();
@@ -274,6 +275,26 @@ export async function syncAccountApiKeys(id: number) {
     });
     return { ok: false, error: message };
   }
+}
+
+/**
+ * 创建/编辑账号后的完整刷新：(额度 ‖ 拉 ApiKey) → 账号下所有 Key 并发拉模型。
+ * 唯一依赖:模型须在 ApiKey 就绪后才能拉。各子步骤自身 try/catch、不抛错并写
+ * system_task_logs,故为 best-effort,Promise.all 不会 reject。
+ */
+export async function refreshAccount(id: number) {
+  const sql = getSql();
+  // 额度与 ApiKey 互不依赖(分别只写 accounts / api_keys),并发执行
+  const [quota, keys] = await Promise.all([
+    syncAccountQuota(id),
+    syncAccountApiKeys(id),
+  ]);
+  // ApiKey 拉完后,账号下每个 Key 并发拉模型(各自作用于不同 api_key 的 upstream_models)
+  const rows = await sql<{ id: number }[]>`
+    select id from api_keys where account_id = ${id}
+  `;
+  const models = await Promise.all(rows.map((r) => syncApiKeyModels(r.id)));
+  return { quota, keys, models };
 }
 
 export async function deleteAccount(id: number) {
