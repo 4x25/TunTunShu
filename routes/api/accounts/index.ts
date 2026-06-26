@@ -27,7 +27,8 @@ export const handler = define.handlers({
     if (!body?.siteId || !body?.userId || !body?.accessToken) {
       return json({ error: "siteId、userId、accessToken 不能为空" }, 400);
     }
-    const id = await createAccount(body);
-    return json({ id });
+    // upsert:命中已有 (siteId, userId) 即更新,统一回 200 + {success, id, updated}。
+    const result = await createAccount(body);
+    return json({ success: true, id: result.id, updated: result.updated });
   },
 });
