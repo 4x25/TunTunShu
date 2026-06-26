@@ -86,6 +86,10 @@ const STRIP_REQUEST = new Set([
   "cookie", // 不把我方源站 cookie 透给上游
   "referer", // 不泄露我方路径到上游日志
   "x-tts-proxy", // 我方会话令牌,绝不外发
+  // 不透传 Accept-Encoding:否则 Deno fetch 认为由我方自行处理压缩、不再自动解压,
+  // 导致 .text()/body 拿到的是压缩字节(注入 HTML 会变乱码)。剥掉后 Deno 自动协商并解压,
+  // 与下方剥离响应 content-encoding 配套。
+  "accept-encoding",
 ]);
 
 const STRIP_RESPONSE = new Set([
