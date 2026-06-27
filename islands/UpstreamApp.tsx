@@ -618,7 +618,6 @@ export default function UpstreamApp() {
       let next:
         | { site: string | null; account: string | null; key: string | null }
         | null = null;
-      let syncAcct: string | null = null; // 账号创建/编辑后待拉取额度+APIKey 的账号 id
       let checkSite: string | null = null; // 站点创建/编辑后待检测连通性的站点 id
       let updatedExisting = false; // 后端 upsert 命中已有记录(更新而非新建)
       if (modal.mode === "create") {
@@ -651,7 +650,6 @@ export default function UpstreamApp() {
           updatedExisting = !!r?.updated;
           if (r?.id != null) {
             next = { site: form.siteId, account: String(r.id), key: null };
-            syncAcct = String(r.id);
           }
         } else {
           const siteId = accounts.find((a) =>
@@ -687,7 +685,6 @@ export default function UpstreamApp() {
         if (nm) payload.name = nm; // 留空则不改,保持原名称
         if (form.accessToken) payload.accessToken = form.accessToken;
         await apiSend("PATCH", `/accounts/${modal.id}`, payload);
-        syncAcct = modal.id;
         // 选中被编辑账号(连同所属站点);非当前账号则重置其下 Key
         const acc = accounts.find((a) => a.id === modal.id);
         next = {
@@ -699,14 +696,16 @@ export default function UpstreamApp() {
       await load();
       if (next) setSel(next);
       setModal(null);
+      // 账号创建/编辑后,后端会自动后台刷新额度/ApiKey/模型,提示用户稍后可见。
+      const base = modal.mode === "create"
+        ? (updatedExisting ? "该记录已存在，已更新" : "创建成功")
+        : "已保存";
       showFlash(
-        modal.mode === "create"
-          ? (updatedExisting ? "该记录已存在，已更新" : "创建成功")
-          : "已保存",
+        modal.type === "account"
+          ? `${base}，正在后台刷新额度 / ApiKey / 模型`
+          : base,
         true,
       );
-      // 账号创建/编辑后立即拉取其额度与 APIKey(后台进行,不阻塞弹窗关闭)
-      if (syncAcct) void syncAccountInfo(syncAcct);
       // 站点创建/编辑后自动检测连通性(后台进行)
       if (checkSite) void healthCheckSiteById(checkSite);
     } catch (e) {
@@ -716,28 +715,6 @@ export default function UpstreamApp() {
     }
   }
 
-  /** 账号创建/编辑后:并行拉取额度 + APIKey,刷新列表。best-effort,失败不影响账号本身。 */
-  async function syncAccountInfo(accountId: string) {
-    setBusy("acctsync" + accountId);
-    try {
-      const [quota, keys] = await Promise.all([
-        apiSend<{ ok?: boolean }>("POST", `/accounts/${accountId}/sync-quota`)
-          .catch(() => null),
-        apiSend<{ ok?: boolean; count?: number }>(
-          "POST",
-          `/accounts/${accountId}/sync-api-keys`,
-        ).catch(() => null),
-      ]);
-      await load();
-      const keyMsg = keys?.ok
-        ? `APIKey ${keys.count ?? 0} 个`
-        : "APIKey 拉取失败";
-      const quotaMsg = quota?.ok ? "额度已更新" : "额度同步失败";
-      showFlash(`账号同步：${keyMsg} · ${quotaMsg}`, !!(keys?.ok || quota?.ok));
-    } finally {
-      setBusy(null);
-    }
-  }
   /** 站点创建/编辑后:自动检测连通性,刷新列表。best-effort。 */
   async function healthCheckSiteById(siteId: string) {
     setBusy("sitecheck" + siteId);
