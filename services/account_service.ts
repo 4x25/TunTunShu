@@ -442,6 +442,7 @@ export async function checkinAccount(id: number) {
       ok: checkinStatus === "checked",
       status: response.status,
       checkinStatus,
+      message,
       body: text,
     };
   } catch (error) {
