@@ -2082,6 +2082,14 @@ button:focus-visible,
 .rel-obj .tag {
   font-size: 10.5px;
 }
+.rel-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.rel-link:hover {
+  text-decoration: underline;
+}
 
 /* ─── settings (系统设置) ────────────────────────────────────────────── */
 .set-wrap {

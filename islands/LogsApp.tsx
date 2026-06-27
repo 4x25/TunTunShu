@@ -110,7 +110,9 @@ export default function LogsApp() {
     sites: Record<string, string>;
     accounts: Record<string, string>;
     keys: Record<string, string>;
-  }>({ sites: {}, accounts: {}, keys: {} });
+    accSite: Record<string, string>; // 账号 id → 所属站点 id
+    keyAcc: Record<string, string>; // APIKey id → 所属账号 id
+  }>({ sites: {}, accounts: {}, keys: {}, accSite: {}, keyAcc: {} });
   const [loading, setLoading] = useState(true);
 
   const [reqQ, setReqQ] = useState("");
@@ -128,8 +130,8 @@ export default function LogsApp() {
         apiGet<ReqLog[]>("/request-logs"),
         apiGet<SysLog[]>("/system-task-logs"),
         apiGet<{ id: string; name: string }[]>("/sites"),
-        apiGet<{ id: string; name: string }[]>("/accounts"),
-        apiGet<{ id: string; name: string }[]>("/api-keys"),
+        apiGet<{ id: string; name: string; site_id: string }[]>("/accounts"),
+        apiGet<{ id: string; name: string; account_id: string }[]>("/api-keys"),
       ]);
       setReqLogs(req);
       setSysLogs(sys);
@@ -137,6 +139,8 @@ export default function LogsApp() {
         sites: Object.fromEntries(sites.map((x) => [x.id, x.name])),
         accounts: Object.fromEntries(accounts.map((x) => [x.id, x.name])),
         keys: Object.fromEntries(keys.map((x) => [x.id, x.name])),
+        accSite: Object.fromEntries(accounts.map((x) => [x.id, x.site_id])),
+        keyAcc: Object.fromEntries(keys.map((x) => [x.id, x.account_id])),
       });
     } finally {
       setLoading(false);
@@ -172,15 +176,18 @@ export default function LogsApp() {
       sysRows.filter((s) => s.status === "failed").length
     }`;
 
-  function relOf(s: SysLog): [string, string] | null {
-    if (s.api_key_id) {
-      return ["APIKey", names.keys[s.api_key_id] ?? `#${s.api_key_id}`];
-    }
-    if (s.account_id) {
-      return ["账号", names.accounts[s.account_id] ?? `#${s.account_id}`];
-    }
-    if (s.site_id) return ["站点", names.sites[s.site_id] ?? `#${s.site_id}`];
-    return null;
+  // 沿 APIKey → 账号 → 站点 反查补全,返回三个关联对象(各为 {id,name} 或 null)
+  function relsOf(s: SysLog) {
+    const keyId = s.api_key_id;
+    const accId = s.account_id ?? (keyId ? names.keyAcc[keyId] ?? null : null);
+    const siteId = s.site_id ?? (accId ? names.accSite[accId] ?? null : null);
+    const mk = (id: string | null, map: Record<string, string>) =>
+      id ? { id, name: map[id] ?? `#${id}` } : null;
+    return {
+      site: mk(siteId, names.sites),
+      account: mk(accId, names.accounts),
+      key: mk(keyId, names.keys),
+    };
   }
 
   return (
@@ -417,19 +424,42 @@ export default function LogsApp() {
                   <th>时间</th>
                   <th>任务类型</th>
                   <th>状态</th>
-                  <th>关联对象</th>
+                  <th>关联站点</th>
+                  <th>关联账号</th>
+                  <th>关联 APIKey</th>
                   <th>信息</th>
                 </tr>
               </thead>
               <tbody>
                 {sysRows.length
                   ? sysRows.map((s) => {
-                    const rel = relOf(s);
+                    const r = relsOf(s);
                     const msgColor = s.status === "failed"
                       ? "color:var(--bad)"
                       : s.status === "skipped"
                       ? "color:var(--muted)"
                       : "";
+                    // 关联对象单元格:可点击跳转上游页并选中(携带父级链使 Miller 列聚焦)
+                    const relCell = (
+                      kind: "site" | "account" | "key",
+                      obj: { id: string; name: string } | null,
+                    ) => {
+                      if (!obj) return <span class="faint">—</span>;
+                      const p = new URLSearchParams();
+                      if (r.site) p.set("site", r.site.id);
+                      if (kind !== "site" && r.account) {
+                        p.set("account", r.account.id);
+                      }
+                      if (kind === "key" && r.key) p.set("key", r.key.id);
+                      return (
+                        <a
+                          class="rel-link mono"
+                          href={`/upstream?${p.toString()}`}
+                        >
+                          {obj.name}
+                        </a>
+                      );
+                    };
                     return (
                       <tr key={s.id}>
                         <td class="tnum">{fmtTime(s.created_at)}</td>
@@ -437,16 +467,9 @@ export default function LogsApp() {
                         <td>
                           <TaskStat s={s.status} />
                         </td>
-                        <td>
-                          {rel
-                            ? (
-                              <span class="rel-obj">
-                                <span class="tag">{rel[0]}</span>
-                                <span class="mono">{rel[1]}</span>
-                              </span>
-                            )
-                            : <span class="faint">—</span>}
-                        </td>
+                        <td>{relCell("site", r.site)}</td>
+                        <td>{relCell("account", r.account)}</td>
+                        <td>{relCell("key", r.key)}</td>
                         <td
                           style={`font-family:var(--font-mono);font-size:12px;${msgColor}`}
                         >
@@ -458,7 +481,7 @@ export default function LogsApp() {
                   : (
                     <tr>
                       <td
-                        colspan={5}
+                        colspan={7}
                         style="text-align:center;color:var(--faint);padding:28px"
                       >
                         {loading ? "加载中…" : "暂无系统日志"}
