@@ -3,6 +3,7 @@ import type { ComponentChildren, JSX } from "preact";
 import { IconClose, IconSearch } from "../components/icons.tsx";
 import { Modal } from "../components/Modal.tsx";
 import { apiGet, apiSend, getToken } from "../components/admin_api.ts";
+import { useUrlState } from "../components/use_url_state.ts";
 
 interface Site {
   id: string;
@@ -190,13 +191,29 @@ export default function UpstreamApp() {
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [sel, setSel] = useState<
-    { site: string | null; account: string | null; key: string | null }
-  >({ site: null, account: null, key: null });
-  const [qSite, setQSite] = useState("");
-  const [qAcc, setQAcc] = useState("");
-  const [qKey, setQKey] = useState("");
-  const [qMod, setQMod] = useState("");
+  // 选中项 + 搜索词以 URL query 为唯一事实来源(刷新可恢复、可分享)
+  const [u, setU] = useUrlState();
+  const sel = {
+    site: u.site ?? null,
+    account: u.account ?? null,
+    key: u.key ?? null,
+  };
+  const qSite = u.siteKeyword ?? "";
+  const qAcc = u.accountKeyword ?? "";
+  const qKey = u.keyKeyword ?? "";
+  const qMod = u.modelKeyword ?? "";
+  // 设置选中三元组:传入的 null/省略键 → 清除对应 URL 参数(setU 以当前 URL 合并)
+  const setSel = (
+    next: Partial<
+      { site: string | null; account: string | null; key: string | null }
+    >,
+  ) => {
+    const patch: Record<string, string> = {};
+    if ("site" in next) patch.site = next.site ?? "";
+    if ("account" in next) patch.account = next.account ?? "";
+    if ("key" in next) patch.key = next.key ?? "";
+    setU(patch);
+  };
 
   const [openDd, setOpenDd] = useState<string | null>(null);
   const [ddFilter, setDdFilter] = useState("");
@@ -219,7 +236,7 @@ export default function UpstreamApp() {
   async function load() {
     setLoading(true);
     try {
-      const [s, a, k, u, m, logs] = await Promise.all([
+      const [s, a, k, um, m, logs] = await Promise.all([
         apiGet<Site[]>("/sites"),
         apiGet<Account[]>("/accounts"),
         apiGet<ApiKey[]>("/api-keys"),
@@ -236,7 +253,7 @@ export default function UpstreamApp() {
       setSites(s);
       setAccounts(a);
       setKeys(k);
-      setUms(u);
+      setUms(um);
       setModels(m);
       // 日志按 id 倒序;取每个账号最新一条签到日志的信息
       const cm: Record<string, string> = {};
@@ -304,24 +321,24 @@ export default function UpstreamApp() {
   const siteName = (id: string) => sites.find((x) => x.id === id)?.name ?? "";
 
   function pickSite(id: string) {
-    setSel((s) => ({
-      site: s.site === id ? null : id,
-      account: null,
-      key: null,
-    }));
+    setSel({ site: sel.site === id ? null : id, account: null, key: null });
   }
   function pickAccount(id: string) {
-    setSel((s) => ({ ...s, account: s.account === id ? null : id, key: null }));
+    setSel({ account: sel.account === id ? null : id, key: null });
   }
   function pickKey(id: string) {
-    setSel((s) => ({ ...s, key: s.key === id ? null : id }));
+    setSel({ key: sel.key === id ? null : id });
   }
   function resetAll() {
-    setSel({ site: null, account: null, key: null });
-    setQSite("");
-    setQAcc("");
-    setQKey("");
-    setQMod("");
+    setU({
+      site: "",
+      account: "",
+      key: "",
+      siteKeyword: "",
+      accountKeyword: "",
+      keyKeyword: "",
+      modelKeyword: "",
+    });
   }
 
   // ── 逐级级联过滤 ────────────────────────────────────────────────────
@@ -352,29 +369,6 @@ export default function UpstreamApp() {
     return modParent.has(m.api_key_id) && hit(m.name + " " + mapped, qMod);
   });
   const ddItems = models.filter((m) => hit(m.name, ddFilter));
-
-  // 某列恰好一项 → 落实到 sel(渲染期写入,sel 始终是唯一真相)。Preact 的
-  // enqueueRender 走微任务,在提交后、绘制前同一拍收敛重渲染,故首帧即正确、无闪烁。
-  // 候选数按「上级选中」级联,但**忽略各列搜索框**(用 *Pool 而非用于渲染的
-  // *Rows):否则在搜索框里把列表筛成一项时会被强制选中且无法取消。
-  // 只填补未选中的层级、绝不清除已选,最多两三帧即收敛、不反复。
-  const accPool = sel.site != null
-    ? accounts.filter((a) => a.site_id === sel.site)
-    : accounts;
-  const keyPool = sel.account != null
-    ? keys.filter((k) => k.account_id === sel.account)
-    : keys;
-  const want = {
-    site: sel.site ?? (sites.length === 1 ? sites[0].id : null),
-    account: sel.account ?? (accPool.length === 1 ? accPool[0].id : null),
-    key: sel.key ?? (keyPool.length === 1 ? keyPool[0].id : null),
-  };
-  if (
-    want.site !== sel.site || want.account !== sel.account ||
-    want.key !== sel.key
-  ) {
-    setSel(want);
-  }
 
   // ── 动作 ──────────────────────────────────────────────────────────
   const toggleSite = (s: Site) =>
@@ -456,7 +450,7 @@ export default function UpstreamApp() {
     if (!confirm(`删除账号「${a.name}」及其下所有 Key/模型？`)) return;
     act("del", async () => {
       await apiSend("DELETE", `/accounts/${a.id}`);
-      setSel((p) => ({ ...p, account: null, key: null }));
+      setSel({ account: null, key: null });
       return `账号「${a.name}」已删除`;
     });
   };
@@ -464,7 +458,7 @@ export default function UpstreamApp() {
     if (!confirm(`删除 Key「${k.name}」及其下模型？`)) return;
     act("del", async () => {
       await apiSend("DELETE", `/api-keys/${k.id}`);
-      setSel((p) => ({ ...p, key: null }));
+      setSel({ key: null });
       return `Key「${k.name}」已删除`;
     });
   };
@@ -831,7 +825,8 @@ export default function UpstreamApp() {
                 class="input"
                 placeholder="筛选站点名称 / origin"
                 value={qSite}
-                onInput={(e) => setQSite((e.target as HTMLInputElement).value)}
+                onInput={(e) =>
+                  setU({ siteKeyword: (e.target as HTMLInputElement).value })}
               />
             </div>
           </div>
@@ -893,7 +888,10 @@ export default function UpstreamApp() {
                 class="input"
                 placeholder="筛选账号名称 / 用户 ID"
                 value={qAcc}
-                onInput={(e) => setQAcc((e.target as HTMLInputElement).value)}
+                onInput={(e) =>
+                  setU({
+                    accountKeyword: (e.target as HTMLInputElement).value,
+                  })}
               />
             </div>
           </div>
@@ -985,7 +983,8 @@ export default function UpstreamApp() {
                 class="input"
                 placeholder="筛选 Key 名称"
                 value={qKey}
-                onInput={(e) => setQKey((e.target as HTMLInputElement).value)}
+                onInput={(e) =>
+                  setU({ keyKeyword: (e.target as HTMLInputElement).value })}
               />
             </div>
           </div>
@@ -1041,7 +1040,8 @@ export default function UpstreamApp() {
                 class="input"
                 placeholder="筛选模型名称"
                 value={qMod}
-                onInput={(e) => setQMod((e.target as HTMLInputElement).value)}
+                onInput={(e) =>
+                  setU({ modelKeyword: (e.target as HTMLInputElement).value })}
               />
             </div>
           </div>
