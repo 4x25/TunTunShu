@@ -7,7 +7,9 @@
  * - 浏览器侧代码全程不用模板字符串(避免与本模板自身的 ${} 冲突),正则用 [/] 规避反斜杠。
  *
  * 脚本逻辑:在任意页面用 /api/status 甄别 new-api → 渲染右下角悬浮按钮(带进度条) →
- * 跨域(GM_xmlhttpRequest)查囤囤鼠是否已录入 → 一键保存站点 + 取 token + 保存账号;
+ * 跨域(GM_xmlhttpRequest)查囤囤鼠是否已录入 → 一键保存站点 + 取 token →
+ * 保存账号前确保至少 1 个 APIKey(无则按分组各建一个无限额度的 DEFAULT 密钥)→ 保存账号
+ * → 调囤囤鼠签到接口签到一次(顺带验证令牌可用);
  * 已录入态点击需 confirm 确认后重新保存(后端 POST 已是 upsert,新建/重存同一链路)。
  *
  * new-api 的 UserAuth 中间件要求每个鉴权请求都带 New-Api-User 头(= 登录用户 id),
@@ -31,7 +33,7 @@ export function buildUserScript(
   return `// ==UserScript==
 // @name         囤囤鼠 · 快捷录入
 // @namespace    tuntunshu
-// @version      1.1.0
+// @version      1.3.1
 // @description  在 new-api 站点一键录入站点与账号到囤囤鼠
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -199,6 +201,62 @@ export function buildUserScript(
       });
   }
 
+  // 同源调 new-api 用户接口:带 session cookie 与 New-Api-User 头,返回解析后 JSON(失败返回 null)。
+  // 与 genAccessToken 一致——脚本运行在 new-api 页面上下文,token 接口为同源,用 fetch 而非跨域。
+  function napi(method, path, userId, body) {
+    return fetch(path, {
+      method: method,
+      credentials: "include",
+      headers: {
+        "New-Api-User": String(userId),
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    }).then(function (r) {
+      return r.json().catch(function () { return null; });
+    });
+  }
+
+  // 确保该用户在 new-api 下至少有 1 个 APIKey;没有则按可用分组各建一个无限额度 DEFAULT 密钥。
+  // 尽力而为:任何环节失败只 console.warn,不抛错(不阻断账号保存)。
+  function ensureApiKeys(userId) {
+    return napi("GET", "/api/token/?p=1&page_size=10", userId).then(function (j) {
+      var data = j && j.data;
+      var total = data && typeof data.total === "number"
+        ? data.total
+        : (data && Array.isArray(data.items) ? data.items.length : 0);
+      if (total >= 1) return; // 已有现成密钥 → 走正常逻辑,不创建
+      // 无密钥:取可用分组,逐个创建。
+      return napi("GET", "/api/user/self/groups", userId).then(function (g) {
+        var groups = (g && g.data && typeof g.data === "object")
+          ? Object.keys(g.data)
+          : [];
+        if (!groups.length) groups = [""]; // 无分组信息时退回默认空分组(用用户默认分组)
+        // 串行创建,便于逐个容错。
+        return groups.reduce(function (p, name) {
+          return p.then(function () {
+            return napi("POST", "/api/token/", userId, {
+              name: ("DEFAULT - " + (name || "default")).slice(0, 50), // new-api 名称上限 50
+              unlimited_quota: true, // 无限额度
+              remain_quota: 0, // 无限时忽略
+              expired_time: -1, // 永不过期:0 会被 new-api 当作已过期
+              group: name,
+            }).then(function (res) {
+              if (!res || !res.success) {
+                console.warn(
+                  "[囤囤鼠] 创建密钥失败:" + name,
+                  res && res.message,
+                );
+              }
+            });
+          });
+        }, Promise.resolve());
+      });
+    }).catch(function (e) {
+      console.warn("[囤囤鼠] 检查/创建密钥失败", e);
+    });
+  }
+
   // 校验囤囤鼠响应:优先把后端的 error/message 透出到 toast。
   function checkStatus(r, what) {
     if (r.status === 401) {
@@ -213,6 +271,28 @@ export function buildUserScript(
     return r.json;
   }
 
+  // 保存成功后,调囤囤鼠账号签到接口(POST /api/accounts/:id/checkin)签到一次,
+  // 顺带验证保存的令牌可用。返回展示文案:签到成功 / 签到需验证 / 签到失败(尽量带原因)。
+  // 失败原因优先级:后端归一化 message(checkinAccount)→ 异常 error → HTTP 状态。
+  // 尽力而为:任何失败都归一化为文案并 resolve,不 reject(不影响录入成功结果)。
+  function tryCheckin(accountId) {
+    return tts("POST", "/api/accounts/" + accountId + "/checkin")
+      .then(function (r) {
+        var j = r.json;
+        if (r.status >= 200 && r.status < 300 && j) {
+          if (j.ok) return "签到成功";
+          if (j.checkinStatus === "manual_required") return "签到需验证";
+        }
+        var reason = (j && (j.message || j.error)) || "";
+        if (!reason && (r.status < 200 || r.status >= 300)) {
+          reason = "HTTP " + r.status;
+        }
+        reason = reason ? String(reason).slice(0, 80) : "";
+        return reason ? ("签到失败:" + reason) : "签到失败";
+      })
+      .catch(function () { return "签到失败"; });
+  }
+
   function onClick() {
     if (state.busy) return;
     var user = getUser();
@@ -224,27 +304,38 @@ export function buildUserScript(
     var wasRecorded = state.recorded;
     var origin = normOrigin(location.origin);
     var siteId = null;
+    var accessToken = null;
     state.busy = true;
     btn.disabled = true;
     btn.style.background = "#0a83c4";
-    // 1.保存站点(upsert) → 2.取 token → 3.保存账号(upsert),进度条逐步推进。
-    step("保存站点…", 12);
+    // 1.保存站点 → 2.取 token → 3.确保 APIKey → 4.保存账号(均 upsert) → 5.签到一次。
+    step("保存站点…", 10);
     tts("POST", "/api/sites", { origin: origin }).then(function (r) {
       siteId = checkStatus(r, "保存站点").id;
-      step("获取令牌…", 45);
+      step("获取令牌…", 35);
       return genAccessToken(user.id);
     }).then(function (token) {
+      accessToken = token;
+      // 保存账号前确保至少 1 个 APIKey(尽力而为,内部已吞错,失败不阻断保存)。
+      step("检查密钥…", 60);
+      return ensureApiKeys(user.id);
+    }).then(function () {
       step("保存账号…", 78);
       return tts("POST", "/api/accounts", {
         siteId: Number(siteId),
         userId: String(user.id),
-        accessToken: token,
+        accessToken: accessToken,
       });
     }).then(function (r) {
-      checkStatus(r, "保存账号");
-      step("完成", 100);
+      var accountId = checkStatus(r, "保存账号").id;
       state.recorded = true;
-      toast(wasRecorded ? "已更新凭证" : "录入成功", true);
+      // 保存成功后顺带签到一次(尽力而为,不改变录入成功结果)。
+      step("签到中…", 90);
+      return tryCheckin(accountId);
+    }).then(function (note) {
+      step("完成", 100);
+      var base = wasRecorded ? "已更新" : "已录入";
+      toast(note ? (base + " · " + note) : base, true);
       setTimeout(function () { state.busy = false; paint(); }, 450);
     }).catch(function (e) {
       state.busy = false;
