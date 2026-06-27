@@ -17,13 +17,8 @@ export const handler = define.handlers({
       { name?: string | null; origin: string; remark?: string | null }
     >(ctx.req);
     if (!body?.origin) return json({ error: "origin is required" }, 400);
+    // upsert:命中已有 origin 即更新,统一回 200 + {success, id, updated}。
     const result = await createSite(body);
-    if (!result.ok) {
-      return json(
-        { error: "该站点 origin 已存在", id: result.existingId },
-        409,
-      );
-    }
-    return json({ id: result.id });
+    return json({ success: true, id: result.id, updated: result.updated });
   },
 });

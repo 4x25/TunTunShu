@@ -28,13 +28,12 @@ export const handler = define.handlers({
     if (!body?.siteId || !body?.userId || !body?.accessToken) {
       return json({ error: "siteId、userId、accessToken 不能为空" }, 400);
     }
-    const id = await createAccount(body);
+    // upsert:命中已有 (siteId, userId) 即更新,统一回 200 + {success, id, updated}。
+    const result = await createAccount(body);
     // 后台刷新账号信息+额度、ApiKey、模型;best-effort,不阻塞响应。
-    if (id != null) {
-      void refreshAccount(id).catch((e) =>
-        console.error("account refresh failed", id, e)
-      );
-    }
-    return json({ id });
+    void refreshAccount(result.id).catch((e) =>
+      console.error("account refresh failed", result.id, e)
+    );
+    return json({ success: true, id: result.id, updated: result.updated });
   },
 });

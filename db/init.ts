@@ -46,6 +46,20 @@ export async function initializeDatabase() {
       updated_at timestamptz not null default now()
     )
   `;
+  // (site_id, user_id) 复合唯一索引(upsert 兜底)。同 sites_origin_key:列级 unique 对
+  // 已存在的库不会补上,故单独建索引。历史数据若已有重复账号会建失败 —— 吞掉并告警,
+  // 清理重复后下次启动自动补建。
+  try {
+    await sql`
+      create unique index if not exists accounts_site_user_key
+        on accounts (site_id, user_id)
+    `;
+  } catch (error) {
+    console.warn(
+      "[init] 无法创建 accounts (site_id,user_id) 唯一索引(可能存在重复账号,清理后重启即可补建):",
+      error,
+    );
+  }
   await sql`
     create table if not exists api_keys (
       id bigserial primary key,
