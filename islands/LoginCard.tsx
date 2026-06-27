@@ -28,7 +28,7 @@ export default function LoginCard() {
       const data = await res.json().catch(() => ({})) as { success?: boolean };
       if (data.success) {
         setToken(pw);
-        globalThis.location.href = "/dashboard";
+        globalThis.location.href = "/";
       } else {
         setError("访问密码不正确");
         setBusy(false);

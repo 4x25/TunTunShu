@@ -3,14 +3,12 @@ import ThemeToggle from "../islands/ThemeToggle.tsx";
 import { IconDoc, IconFeedback, IconGitHub, IconLogout } from "./icons.tsx";
 
 export type NavKey =
-  | "dashboard"
   | "upstream"
   | "models"
   | "logs"
   | "settings";
 
 const NAV: { key: NavKey; href: string; label: string }[] = [
-  { key: "dashboard", href: "/dashboard", label: "仪表盘" },
   { key: "upstream", href: "/upstream", label: "上游管理" },
   { key: "models", href: "/models", label: "模型管理" },
   { key: "logs", href: "/logs", label: "日志" },
@@ -19,7 +17,7 @@ const NAV: { key: NavKey; href: string; label: string }[] = [
 
 interface LayoutProps {
   active?: NavKey;
-  /** 品牌链接目标，默认仪表盘 */
+  /** 品牌链接目标，默认首页 */
   brandHref?: string;
   /** 顶栏右侧操作区，默认「退出登录」图标按钮 */
   actions?: ComponentChildren;
@@ -29,8 +27,7 @@ interface LayoutProps {
 }
 
 export function Layout(
-  { active, brandHref = "/dashboard", actions, footerIcons, children }:
-    LayoutProps,
+  { active, brandHref = "/", actions, footerIcons, children }: LayoutProps,
 ) {
   return (
     <>
