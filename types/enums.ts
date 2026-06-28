@@ -29,6 +29,15 @@ export type ApiKeyStatus = typeof apiKeyStatuses[number];
 export const upstreamModelStatuses = ["unknown", "healthy", "invalid"] as const;
 export type UpstreamModelStatus = typeof upstreamModelStatuses[number];
 
+// 上游模型适配的端点格式(仅用于测试功能,不影响线上代理路由)。
+export const endpointTypes = [
+  "openai_chat",
+  "openai_responses",
+  "claude_messages",
+  "gemini_generate",
+] as const;
+export type EndpointType = typeof endpointTypes[number];
+
 export const requestLogStatuses = ["success", "failed"] as const;
 export type RequestLogStatus = typeof requestLogStatuses[number];
 

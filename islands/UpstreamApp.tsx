@@ -40,10 +40,39 @@ interface UpstreamModel {
   name: string;
   enabled: boolean;
   status: string;
+  endpoint_type: string;
 }
 interface Model {
   id: string;
   name: string;
+}
+
+// 端点类型(仅测试用):下拉展示标签。
+const ENDPOINT_LABELS: Record<string, string> = {
+  openai_chat: "OpenAI chat",
+  openai_responses: "OpenAI responses",
+  claude_messages: "Claude messages",
+  gemini_generate: "Gemini generate",
+};
+const ENDPOINT_OPTIONS = Object.keys(ENDPOINT_LABELS);
+const TEST_KINDS: { kind: "chat" | "vision" | "tool"; label: string }[] = [
+  { kind: "chat", label: "对话测试" },
+  { kind: "vision", label: "图像识别" },
+  { kind: "tool", label: "工具调用" },
+];
+
+interface TestResult {
+  endpointType: string;
+  kind: string;
+  prompt: string;
+  imageLabel?: string;
+  reply: string;
+  toolCalls: { name: string; input: unknown }[];
+  pass: boolean;
+  reason: string;
+  latencyMs: number;
+  httpStatus?: number;
+  error?: string;
 }
 
 const STATUS_MAP: Record<string, [string, string]> = {
@@ -217,6 +246,11 @@ export default function UpstreamApp() {
 
   const [openDd, setOpenDd] = useState<string | null>(null);
   const [ddFilter, setDdFilter] = useState("");
+  const [openEp, setOpenEp] = useState<string | null>(null); // 端点下拉(按模型 id)
+  const [testView, setTestView] = useState<
+    { id: string; name: string; kind: "chat" | "vision" | "tool" } | null
+  >(null);
+  const [testOut, setTestOut] = useState<TestResult | "loading" | null>(null);
 
   const [modal, setModal] = useState<ModalSpec | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
@@ -273,12 +307,17 @@ export default function UpstreamApp() {
   }, []);
 
   useEffect(() => {
-    const onClick = () => setOpenDd(null);
+    const onClick = () => {
+      setOpenDd(null);
+      setOpenEp(null);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOpenDd(null);
+        setOpenEp(null);
         setModal(null);
         setNmFor(null);
+        setTestView(null);
       }
     };
     document.addEventListener("click", onClick);
@@ -304,6 +343,49 @@ export default function UpstreamApp() {
       showFlash(e instanceof Error ? e.message : "操作失败", false);
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** 切换该上游模型测试所用的端点格式(落库)。 */
+  const setEndpoint = (m: UpstreamModel, ep: string) => {
+    setOpenEp(null);
+    if (ep === m.endpoint_type) return;
+    act("ep" + m.id, async () => {
+      await apiSend("PATCH", `/upstream-models/${m.id}`, { endpointType: ep });
+      return `「${m.name}」端点已切换为 ${ENDPOINT_LABELS[ep] ?? ep}`;
+    });
+  };
+
+  /** 对某上游模型按其端点类型发起一次测试,结果在弹窗展示。 */
+  async function runTest(m: UpstreamModel, kind: "chat" | "vision" | "tool") {
+    setTestView({ id: m.id, name: m.name, kind });
+    setTestOut("loading");
+    const fail = (reason: string, error: string): TestResult => ({
+      endpointType: m.endpoint_type,
+      kind,
+      prompt: "",
+      reply: "",
+      toolCalls: [],
+      pass: false,
+      reason,
+      latencyMs: 0,
+      error,
+    });
+    try {
+      const res = await fetch(`/api/upstream-models/${m.id}/test`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${getToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ kind }),
+      });
+      const data = await res.json().catch(() => null) as TestResult | null;
+      setTestOut(
+        res.ok && data ? data : fail("请求失败", `HTTP ${res.status}`),
+      );
+    } catch (e) {
+      setTestOut(fail("请求失败", e instanceof Error ? e.message : "error"));
     }
   }
 
@@ -1116,6 +1198,64 @@ export default function UpstreamApp() {
                         </div>
                       </div>
                     </div>
+                    <RowActions
+                      left={
+                        <div
+                          class={`dd ep-dd${openEp === m.id ? " open" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            class="dd-btn"
+                            title="切换该模型测试所用的端点格式"
+                            disabled={busy === "ep" + m.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenDd(null);
+                              setOpenEp((cur) => cur === m.id ? null : m.id);
+                            }}
+                          >
+                            <span class="cur">
+                              {busy === "ep" + m.id
+                                ? "切换中…"
+                                : (ENDPOINT_LABELS[m.endpoint_type] ??
+                                  m.endpoint_type)}
+                            </span>
+                            <span class="caret">▾</span>
+                          </button>
+                          <div
+                            class="dd-pop"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div class="dd-list">
+                              {ENDPOINT_OPTIONS.map((ep) => (
+                                <div
+                                  key={ep}
+                                  class={`dd-item${
+                                    m.endpoint_type === ep ? " sel" : ""
+                                  }`}
+                                  onClick={() => setEndpoint(m, ep)}
+                                >
+                                  {ENDPOINT_LABELS[ep]}
+                                  {m.endpoint_type === ep && (
+                                    <span class="check">✓</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      }
+                    >
+                      {TEST_KINDS.map((t) => (
+                        <ActBtn
+                          key={t.kind}
+                          disabled={busy === "ep" + m.id}
+                          onClick={() => runTest(m, t.kind)}
+                        >
+                          {t.label}
+                        </ActBtn>
+                      ))}
+                    </RowActions>
                   </MillerRow>
                 );
               })
@@ -1389,6 +1529,115 @@ export default function UpstreamApp() {
                 onClick={saveNewModel}
               >
                 创建并映射
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+
+      {/* 模型测试结果弹窗 */}
+      <Modal open={testView !== null} onClose={() => setTestView(null)} wide>
+        {testView && (
+          <>
+            <div class="modal-head">
+              <h3>
+                {TEST_KINDS.find((t) => t.kind === testView.kind)?.label} ·{" "}
+                {testView.name}
+              </h3>
+              <button
+                type="button"
+                class="icon-btn"
+                onClick={() => setTestView(null)}
+                aria-label="关闭"
+              >
+                <IconClose />
+              </button>
+            </div>
+            <div class="modal-body">
+              {testOut === "loading" || testOut === null
+                ? <div class="muted">测试中…（正在直连上游发起真实请求）</div>
+                : (
+                  <div class="test-result">
+                    <div class="tr-row">
+                      <span class="tr-k">端点</span>
+                      <span class="tr-v">
+                        {ENDPOINT_LABELS[testOut.endpointType] ??
+                          testOut.endpointType}
+                      </span>
+                    </div>
+                    <div class="tr-row">
+                      <span class="tr-k">结论</span>
+                      <span class="tr-v">
+                        <span
+                          class={`pill pill-${testOut.pass ? "ok" : "bad"}`}
+                        >
+                          {testOut.pass ? "通过" : "未通过"}
+                        </span>
+                        <span class="muted" style="margin-left:8px">
+                          {testOut.reason}
+                        </span>
+                      </span>
+                    </div>
+                    <div class="tr-row">
+                      <span class="tr-k">耗时</span>
+                      <span class="tr-v">{testOut.latencyMs} ms</span>
+                    </div>
+                    <div class="tr-row">
+                      <span class="tr-k">提示词</span>
+                      <span class="tr-v mono">{testOut.prompt || "—"}</span>
+                    </div>
+                    {testOut.imageLabel && (
+                      <div class="tr-row">
+                        <span class="tr-k">测试图</span>
+                        <span class="tr-v">{testOut.imageLabel}</span>
+                      </div>
+                    )}
+                    <div class="tr-row">
+                      <span class="tr-k">回复</span>
+                      <span class="tr-v mono">{testOut.reply || "（空）"}</span>
+                    </div>
+                    {testOut.toolCalls.length > 0 && (
+                      <div class="tr-row">
+                        <span class="tr-k">工具调用</span>
+                        <span class="tr-v mono">
+                          {testOut.toolCalls.map((c) =>
+                            `${c.name}(${JSON.stringify(c.input)})`
+                          ).join("; ")}
+                        </span>
+                      </div>
+                    )}
+                    {testOut.error && (
+                      <div class="tr-row">
+                        <span class="tr-k">错误</span>
+                        <span
+                          class="tr-v mono"
+                          style="color:var(--bad)"
+                        >
+                          {testOut.error}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+            </div>
+            <div class="modal-foot">
+              <button
+                type="button"
+                class="btn"
+                onClick={() => setTestView(null)}
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                class="btn btn-primary"
+                disabled={testOut === "loading"}
+                onClick={() => {
+                  const m = ums.find((x) => x.id === testView.id);
+                  if (m) runTest(m, testView.kind);
+                }}
+              >
+                {testOut === "loading" ? "测试中…" : "重新测试"}
               </button>
             </div>
           </>

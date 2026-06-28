@@ -1838,6 +1838,41 @@ button:focus-visible,
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/* 端点切换下拉:固定宽度,弹层左对齐留足可读宽度 */
+.ep-dd {
+  width: 152px;
+  flex: none;
+}
+.ep-dd .dd-pop {
+  right: auto;
+  min-width: 188px;
+}
+/* 测试结果弹窗:键值两列布局 */
+.test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tr-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.tr-k {
+  color: var(--muted);
+  font-size: 12px;
+  padding-top: 2px;
+}
+.tr-v {
+  font-size: 13px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.tr-v.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 .mrow .bal {
   font-weight: 700;
 }
