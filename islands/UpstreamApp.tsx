@@ -550,7 +550,7 @@ export default function UpstreamApp() {
 
   const setMap = (umId: string, modelId: string | null) => {
     setOpenDd(null);
-    act("map", async () => {
+    act("map" + umId, async () => {
       await apiSend("PATCH", `/upstream-models/${umId}`, { modelId });
       return modelId ? "映射已更新" : "已解除映射";
     });
@@ -1200,6 +1200,7 @@ export default function UpstreamApp() {
                       <button
                         type="button"
                         class={`dd-btn${mapped ? "" : " unmapped"}`}
+                        disabled={busy === "map" + m.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           setDdFilter("");
@@ -1207,9 +1208,13 @@ export default function UpstreamApp() {
                         }}
                       >
                         <span class="cur">
-                          {mapped ? "→ " + mapped : "未映射 · 点击选择"}
+                          {busy === "map" + m.id
+                            ? "切换中…"
+                            : (mapped ? "→ " + mapped : "未映射 · 点击选择")}
                         </span>
-                        <span class="caret">▾</span>
+                        {busy === "map" + m.id
+                          ? <span class="btn-spinner"></span>
+                          : <span class="caret">▾</span>}
                       </button>
                       <div class="dd-pop" onClick={(e) => e.stopPropagation()}>
                         <div class="dd-search">

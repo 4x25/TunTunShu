@@ -1871,6 +1871,10 @@ button:focus-visible,
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
+/* 映射切换中:spinner 顶到右侧(占位原小三角的位置) */
+.dd-btn .btn-spinner {
+  margin-left: auto;
+}
 /* 品牌图标:单色 currentColor,随主题/文字色自适应 */
 .brand-ico {
   width: 16px;
