@@ -1838,18 +1838,38 @@ button:focus-visible,
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-/* 端点切换下拉:选择框仅显示品牌图标(紧凑),弹层左对齐留足可读宽度 */
+/* 协议(端点)选择:置于标题区模型名前,选择框仅一个品牌图标(紧凑、无小三角) */
 .ep-dd {
-  width: 50px;
   flex: none;
 }
 .ep-btn {
-  padding: 0 7px;
-  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+}
+.ep-btn:hover:not(:disabled) {
+  background: var(--fg-soft);
 }
 .ep-dd .dd-pop {
+  left: 0;
   right: auto;
-  min-width: 188px;
+  min-width: 200px;
+}
+/* 协议下拉浮层顶部的说明提示 */
+.dd-hint {
+  padding: 8px 11px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 /* 品牌图标:单色 currentColor,随主题/文字色自适应 */
 .brand-ico {

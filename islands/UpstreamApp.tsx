@@ -145,15 +145,17 @@ function MillerRow(
 }
 /** 行首(l1):名称 + 状态徽标 + 启停开关。 */
 function RowHead(
-  { name, status, on, onToggle }: {
+  { name, status, on, onToggle, leading }: {
     name: string;
     status: string;
     on: boolean;
     onToggle: () => void;
+    leading?: ComponentChildren;
   },
 ) {
   return (
     <div class="l1">
+      {leading}
       <span class="nm">{name}</span>
       <Pill status={status} />
       <Switch on={on} onChange={onToggle} />
@@ -1141,6 +1143,58 @@ export default function UpstreamApp() {
                       status={m.status}
                       on={m.enabled}
                       onToggle={() => toggleUm(m)}
+                      leading={
+                        <div
+                          class={`dd ep-dd${openEp === m.id ? " open" : ""}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            class="ep-btn"
+                            title={`协议:${
+                              ENDPOINT_LABELS[m.endpoint_type] ??
+                                m.endpoint_type
+                            }(点击切换)`}
+                            disabled={busy === "ep" + m.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenDd(null);
+                              setOpenEp((cur) => cur === m.id ? null : m.id);
+                            }}
+                          >
+                            {busy === "ep" + m.id
+                              ? <span class="btn-spinner"></span>
+                              : (
+                                <EndpointIcon
+                                  type={m.endpoint_type}
+                                  class="brand-ico"
+                                />
+                              )}
+                          </button>
+                          <div class="dd-pop">
+                            <div class="dd-hint">
+                              选择上游该模型支持的协议类型
+                            </div>
+                            <div class="dd-list">
+                              {ENDPOINT_OPTIONS.map((ep) => (
+                                <div
+                                  key={ep}
+                                  class={`dd-item${
+                                    m.endpoint_type === ep ? " sel" : ""
+                                  }`}
+                                  onClick={() => setEndpoint(m, ep)}
+                                >
+                                  <EndpointIcon type={ep} class="brand-ico" />
+                                  {ENDPOINT_LABELS[ep]}
+                                  {m.endpoint_type === ep && (
+                                    <span class="check">✓</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      }
                     />
                     <div class={`dd${openDd === m.id ? " open" : ""}`}>
                       <button
@@ -1199,60 +1253,7 @@ export default function UpstreamApp() {
                         </div>
                       </div>
                     </div>
-                    <RowActions
-                      left={
-                        <div
-                          class={`dd ep-dd${openEp === m.id ? " open" : ""}`}
-                        >
-                          <button
-                            type="button"
-                            class="dd-btn ep-btn"
-                            title={`端点：${
-                              ENDPOINT_LABELS[m.endpoint_type] ??
-                                m.endpoint_type
-                            }（点击切换）`}
-                            disabled={busy === "ep" + m.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenDd(null);
-                              setOpenEp((cur) => cur === m.id ? null : m.id);
-                            }}
-                          >
-                            {busy === "ep" + m.id
-                              ? <span class="btn-spinner"></span>
-                              : (
-                                <EndpointIcon
-                                  type={m.endpoint_type}
-                                  class="brand-ico"
-                                />
-                              )}
-                            <span class="caret">▾</span>
-                          </button>
-                          <div
-                            class="dd-pop"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div class="dd-list">
-                              {ENDPOINT_OPTIONS.map((ep) => (
-                                <div
-                                  key={ep}
-                                  class={`dd-item${
-                                    m.endpoint_type === ep ? " sel" : ""
-                                  }`}
-                                  onClick={() => setEndpoint(m, ep)}
-                                >
-                                  <EndpointIcon type={ep} class="brand-ico" />
-                                  {ENDPOINT_LABELS[ep]}
-                                  {m.endpoint_type === ep && (
-                                    <span class="check">✓</span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      }
-                    >
+                    <RowActions>
                       {TEST_KINDS.map((t) => (
                         <ActBtn
                           key={t.kind}
