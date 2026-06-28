@@ -44,6 +44,55 @@ function randCode(len: number): string {
 function norm(s: string): string {
   return s.toLowerCase().replace(/\s+/g, "");
 }
+/**
+ * base64(无前缀)→ 字节。AI SDK 的 file 部件传二进制时,各 provider 会自行编码为
+ * data URL / base64 source / inline_data;若直接传裸 base64 字符串,OpenAI provider
+ * 会把它当作 URL 原样下发,导致上游报「URL must be ... data or file URL」。
+ */
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+/** 由 base64 魔数嗅探图片 MIME,用于补 data URL 前缀。 */
+function sniffImageMime(b64: string): string {
+  if (b64.startsWith("/9j/")) return "image/jpeg";
+  if (b64.startsWith("R0lGOD")) return "image/gif";
+  if (b64.startsWith("UklGR")) return "image/webp";
+  return "image/png";
+}
+/**
+ * @ai-sdk/openai 的 chat 路径会把内联图片的 image_url.url 写成裸 base64(无 data:
+ * 前缀),上游会报「URL must be ... data or file URL」。此 fetch 包装在出站请求体里
+ * 把裸 base64 的 image_url 补成合法 data URL。仅用于 openai_chat 端点。
+ */
+const repairImageUrlFetch: typeof globalThis.fetch = (input, init) => {
+  const body = init?.body;
+  if (typeof body === "string" && body.includes('"image_url"')) {
+    try {
+      const obj = JSON.parse(body);
+      let changed = false;
+      for (const m of obj?.messages ?? []) {
+        if (!Array.isArray(m?.content)) continue;
+        for (const p of m.content) {
+          const url = p?.image_url?.url;
+          if (
+            p?.type === "image_url" && typeof url === "string" &&
+            !/^(https?:|data:|file:)/i.test(url)
+          ) {
+            p.image_url.url = `data:${sniffImageMime(url)};base64,${url}`;
+            changed = true;
+          }
+        }
+      }
+      if (changed) return fetch(input, { ...init, body: JSON.stringify(obj) });
+    } catch {
+      // 解析失败则原样发送
+    }
+  }
+  return fetch(input, init);
+};
 
 // ── 按端点类型构造 AI SDK 语言模型(baseURL=上游 origin, apiKey=上游 key) ──
 function buildModel(
@@ -58,7 +107,11 @@ function buildModel(
   const headers = { Authorization: `Bearer ${key}` };
   switch (ep) {
     case "openai_chat":
-      return createOpenAI({ baseURL: `${base}/v1`, apiKey: key }).chat(name);
+      return createOpenAI({
+        baseURL: `${base}/v1`,
+        apiKey: key,
+        fetch: repairImageUrlFetch,
+      }).chat(name);
     case "openai_responses":
       return createOpenAI({ baseURL: `${base}/v1`, apiKey: key }).responses(
         name,
@@ -175,7 +228,11 @@ function buildCase(kind: TestKind): CaseSpec {
             role: "user",
             content: [
               { type: "text", text: prompt },
-              { type: "file", data: img.data, mediaType: img.mediaType },
+              {
+                type: "file",
+                data: b64ToBytes(img.data),
+                mediaType: img.mediaType,
+              },
             ],
           }],
           maxOutputTokens: MAX_OUTPUT_TOKENS,
