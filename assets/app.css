@@ -1838,14 +1838,30 @@ button:focus-visible,
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-/* 端点切换下拉:固定宽度,弹层左对齐留足可读宽度 */
+/* 端点切换下拉:选择框仅显示品牌图标(紧凑),弹层左对齐留足可读宽度 */
 .ep-dd {
-  width: 152px;
+  width: 50px;
   flex: none;
+}
+.ep-btn {
+  padding: 0 7px;
+  gap: 4px;
 }
 .ep-dd .dd-pop {
   right: auto;
   min-width: 188px;
+}
+/* 品牌图标:单色 currentColor,随主题/文字色自适应 */
+.brand-ico {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: block;
+}
+.tr-endpoint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 /* 测试结果弹窗:键值两列布局 */
 .test-result {

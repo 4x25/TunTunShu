@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import { IconClose, IconSearch } from "../components/icons.tsx";
+import { EndpointIcon } from "../components/brand_icons.tsx";
 import { Modal } from "../components/Modal.tsx";
 import { apiGet, apiSend, getToken } from "../components/admin_api.ts";
 import { useUrlState } from "../components/use_url_state.ts";
@@ -1205,8 +1206,11 @@ export default function UpstreamApp() {
                         >
                           <button
                             type="button"
-                            class="dd-btn"
-                            title="切换该模型测试所用的端点格式"
+                            class="dd-btn ep-btn"
+                            title={`端点：${
+                              ENDPOINT_LABELS[m.endpoint_type] ??
+                                m.endpoint_type
+                            }（点击切换）`}
                             disabled={busy === "ep" + m.id}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1214,12 +1218,14 @@ export default function UpstreamApp() {
                               setOpenEp((cur) => cur === m.id ? null : m.id);
                             }}
                           >
-                            <span class="cur">
-                              {busy === "ep" + m.id
-                                ? "切换中…"
-                                : (ENDPOINT_LABELS[m.endpoint_type] ??
-                                  m.endpoint_type)}
-                            </span>
+                            {busy === "ep" + m.id
+                              ? <span class="btn-spinner"></span>
+                              : (
+                                <EndpointIcon
+                                  type={m.endpoint_type}
+                                  class="brand-ico"
+                                />
+                              )}
                             <span class="caret">▾</span>
                           </button>
                           <div
@@ -1235,6 +1241,7 @@ export default function UpstreamApp() {
                                   }`}
                                   onClick={() => setEndpoint(m, ep)}
                                 >
+                                  <EndpointIcon type={ep} class="brand-ico" />
                                   {ENDPOINT_LABELS[ep]}
                                   {m.endpoint_type === ep && (
                                     <span class="check">✓</span>
@@ -1560,7 +1567,11 @@ export default function UpstreamApp() {
                   <div class="test-result">
                     <div class="tr-row">
                       <span class="tr-k">端点</span>
-                      <span class="tr-v">
+                      <span class="tr-v tr-endpoint">
+                        <EndpointIcon
+                          type={testOut.endpointType}
+                          class="brand-ico"
+                        />
                         {ENDPOINT_LABELS[testOut.endpointType] ??
                           testOut.endpointType}
                       </span>
