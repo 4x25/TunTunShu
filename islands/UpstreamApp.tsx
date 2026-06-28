@@ -112,6 +112,14 @@ function Switch({ on, onChange }: { on: boolean; onChange: () => void }) {
 function hit(s: string, q: string) {
   return s.toLowerCase().indexOf(q.trim().toLowerCase()) >= 0;
 }
+// 模型列表排序:启用优先(启用→禁用),同组内按名称不区分大小写 a→z。
+function sortUms<T extends { name: string; enabled: boolean }>(list: T[]): T[] {
+  return [...list].sort((a, b) =>
+    a.enabled !== b.enabled
+      ? (a.enabled ? -1 : 1)
+      : a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  );
+}
 function maskKey(k: string) {
   return k.length > 12 ? `${k.slice(0, 6)}••••${k.slice(-4)}` : k;
 }
@@ -290,7 +298,7 @@ export default function UpstreamApp() {
       setSites(s);
       setAccounts(a);
       setKeys(k);
-      setUms(um);
+      setUms(sortUms(um));
       setModels(m);
       // 日志按 id 倒序;取每个账号最新一条签到日志的信息
       const cm: Record<string, string> = {};
