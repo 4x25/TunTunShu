@@ -1838,6 +1838,81 @@ button:focus-visible,
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/* 协议(端点)选择:置于标题区模型名前,选择框仅一个品牌图标(紧凑、无小三角) */
+.ep-dd {
+  flex: none;
+}
+.ep-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+}
+.ep-btn:hover:not(:disabled) {
+  background: var(--fg-soft);
+}
+.ep-dd .dd-pop {
+  left: 0;
+  right: auto;
+  min-width: 200px;
+}
+/* 协议下拉浮层顶部的说明提示 */
+.dd-hint {
+  padding: 8px 11px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+/* 映射切换中:spinner 顶到右侧(占位原小三角的位置) */
+.dd-btn .btn-spinner {
+  margin-left: auto;
+}
+/* 品牌图标:单色 currentColor,随主题/文字色自适应 */
+.brand-ico {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: block;
+}
+.tr-endpoint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 测试结果弹窗:键值两列布局 */
+.test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tr-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.tr-k {
+  color: var(--muted);
+  font-size: 12px;
+  padding-top: 2px;
+}
+.tr-v {
+  font-size: 13px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.tr-v.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 .mrow .bal {
   font-weight: 700;
 }

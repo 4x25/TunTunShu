@@ -30,7 +30,11 @@
     "@types/babel__core": "npm:@types/babel__core@^7.20.5",
     "tailwindcss": "npm:tailwindcss@^4.1.10",
     "@tailwindcss/vite": "npm:@tailwindcss/vite@^4.1.12",
-    "postgres": "npm:postgres@^3.4.7"
+    "postgres": "npm:postgres@^3.4.7",
+    "ai": "npm:ai@^7.0.3",
+    "@ai-sdk/openai": "npm:@ai-sdk/openai@^4.0.1",
+    "@ai-sdk/anthropic": "npm:@ai-sdk/anthropic@^4.0.0",
+    "@ai-sdk/google": "npm:@ai-sdk/google@^4.0.1"
   },
   "compilerOptions": {
     "lib": [

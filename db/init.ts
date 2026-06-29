@@ -90,11 +90,17 @@ export async function initializeDatabase() {
       name text not null,
       enabled boolean not null default true,
       status text not null default 'unknown',
+      endpoint_type text not null default 'openai_chat',
       last_sync_log_id bigint,
       last_request_log_id bigint,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
+  `;
+  // endpoint_type 为后加列:对已存在的库用 add column if not exists 幂等补列。
+  await sql`
+    alter table upstream_models
+    add column if not exists endpoint_type text not null default 'openai_chat'
   `;
   await sql`
     create table if not exists request_logs (

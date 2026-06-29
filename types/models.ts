@@ -2,6 +2,7 @@ import type {
   AccountStatus,
   ApiKeyStatus,
   CheckinStatus,
+  EndpointType,
   RequestLogStatus,
   RequestType,
   SiteStatus,
@@ -66,6 +67,7 @@ export interface UpstreamModel {
   name: string;
   enabled: boolean;
   status: UpstreamModelStatus;
+  endpointType: EndpointType;
   lastSyncLogId: number | null;
   lastRequestLogId: number | null;
   createdAt: Date;
