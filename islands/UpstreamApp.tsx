@@ -1212,6 +1212,7 @@ export default function UpstreamApp() {
                         onClick={(e) => {
                           e.stopPropagation();
                           setDdFilter("");
+                          setOpenEp(null);
                           setOpenDd((cur) => cur === m.id ? null : m.id);
                         }}
                       >
