@@ -173,7 +173,7 @@ POST)。
    响应,则**透传上游真实 body/状态码/Content-Type**(保留 403/quota
    语义);仅当从未拿到任何 HTTP 响应才回合成的 openaiError 502。另:缺 model 回
    400,无候选回 404 model_not_found。
-7. 日志中 Key 经 `maskKey` 脱敏(`first4…last4`,长度 ≤8 时 `first1…last1`)。
+7. 日志中 Key 经 `maskKey` 脱敏(`first4...last4`,长度 ≤8 时 `first1...last1`)。
 
 `GET /v1/models` 返回
 `{object:'list', data:[{id:name, object:'model', created:0, owned_by:'tuntunshu'}]}`,

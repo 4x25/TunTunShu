@@ -9,6 +9,9 @@ input=$(cat)
 command -v jq >/dev/null 2>&1 || exit 0
 command -v deno >/dev/null 2>&1 || exit 0
 
+# 输入须为合法 JSON;畸形则放行(无法判定 stop_hook_active,放行优于误阻断/死循环)。
+printf '%s' "$input" | jq -e . >/dev/null 2>&1 || exit 0
+
 # 防无限循环:若本次 stop 已是上一次 stop-hook 阻断后的续跑,直接放行。
 if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false')" = "true" ]; then
   exit 0
