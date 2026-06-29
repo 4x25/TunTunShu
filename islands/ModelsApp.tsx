@@ -53,6 +53,7 @@ export default function ModelsApp() {
   const [editId, setEditId] = useState<string | null | "new">(null);
   const [mName, setMName] = useState("");
   const [mOn, setMOn] = useState(true);
+  const [busy, setBusy] = useState<"" | "save" | "del">("");
 
   const [chanId, setChanId] = useState<string | null>(null);
   const [testOut, setTestOut] = useState<
@@ -121,20 +122,30 @@ export default function ModelsApp() {
   }
   async function saveEdit() {
     const name = mName.trim();
-    if (!name) return;
-    if (editId === "new") {
-      await apiSend("POST", "/models", { name });
-    } else if (editId) {
-      await apiSend("PATCH", `/models/${editId}`, { name, enabled: mOn });
+    if (!name || busy) return;
+    setBusy("save");
+    try {
+      if (editId === "new") {
+        await apiSend("POST", "/models", { name });
+      } else if (editId) {
+        await apiSend("PATCH", `/models/${editId}`, { name, enabled: mOn });
+      }
+      setEditId(null);
+      await load();
+    } finally {
+      setBusy("");
     }
-    setEditId(null);
-    await load();
   }
   async function removeModel() {
-    if (!editId || editId === "new") return;
-    await apiSend("DELETE", `/models/${editId}`);
-    setEditId(null);
-    await load();
+    if (!editId || editId === "new" || busy) return;
+    setBusy("del");
+    try {
+      await apiSend("DELETE", `/models/${editId}`);
+      setEditId(null);
+      await load();
+    } finally {
+      setBusy("");
+    }
   }
 
   async function unmap(um: UpstreamModel) {
@@ -202,8 +213,14 @@ export default function ModelsApp() {
           <p class="page-sub">对外暴露的统一模型名 · 由上游通道聚合提供</p>
         </div>
         <div class="kbar">
-          <button type="button" class="btn btn-ghost btn-sm" onClick={load}>
-            刷新
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            disabled={loading}
+            onClick={load}
+          >
+            {loading && <span class="btn-spinner"></span>}
+            {loading ? "刷新中…" : "刷新"}
           </button>
         </div>
       </div>
@@ -419,16 +436,29 @@ export default function ModelsApp() {
                   type="button"
                   class="btn"
                   style="margin-right:auto;color:var(--bad);border-color:color-mix(in oklch,var(--bad) 40%,transparent)"
+                  disabled={!!busy}
                   onClick={removeModel}
                 >
-                  删除
+                  {busy === "del" && <span class="btn-spinner"></span>}
+                  {busy === "del" ? "删除中…" : "删除"}
                 </button>
               )}
-              <button type="button" class="btn" onClick={() => setEditId(null)}>
+              <button
+                type="button"
+                class="btn"
+                disabled={!!busy}
+                onClick={() => setEditId(null)}
+              >
                 取消
               </button>
-              <button type="button" class="btn btn-primary" onClick={saveEdit}>
-                保存
+              <button
+                type="button"
+                class="btn btn-primary"
+                disabled={!!busy}
+                onClick={saveEdit}
+              >
+                {busy === "save" && <span class="btn-spinner"></span>}
+                {busy === "save" ? "保存中…" : "保存"}
               </button>
             </div>
           </>
