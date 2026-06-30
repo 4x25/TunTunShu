@@ -11,3 +11,6 @@ _fresh/
 node_modules/
 vendor/
 
+# Deno 锁文件(本仓选择忽略,避免锁文件 churn;Deno Deploy 会自行重新解析依赖)
+deno.lock
+
