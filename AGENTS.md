@@ -61,6 +61,18 @@ review——子代理不偏袒作者写的代码,能更中立地挑出问题;再
 已部署到 **Deno Deploy**:**推送代码到仓库即自动触发构建 + 预览**,无需手动部署。
 推送前先在本地跑通上面的校验三步。
 
+## CI
+
+GitHub Actions(`.github/workflows/ci.yml`)在 push / PR 到 `master` 时,在
+ubuntu-latest 上跑四步:`deno install`(补齐
+node_modules——`nodeModulesDir:
+"manual"` 必须先装,否则 `deno check` 因缺包失败)→
+`deno task check`(fmt --check + lint + check 静态校验)→ `deno test -A`(测试)→
+`deno task build`(vite build,验证生产构建——已实测不连数据库,无需任何
+env)。权限收敛为 `contents:
+read`。CI 只做质量门禁,**不负责部署**——部署仍由 Deno
+Deploy 在推送时自动完成。
+
 ## Environment
 
 | Env            | 必填 | 默认            | 说明                                                             |

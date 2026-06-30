@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# 仅做静态校验与测试,不写回仓库 —— 最小权限
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          # 锁定到本地开发同款版本,而非浮动 v2.x:Deno 发版会改 fmt/lint 规则
+          # (例:2.9.0 收紧了 CSS 选择器换行规则,会把既有 assets/app.css 判为未格式化),
+          # 浮动版本会让 deno task check 随 runner 装到的新版本莫名变红。升级 Deno 时同步改这里。
+          deno-version: "2.8.3"
+          cache: true
+
+      # nodeModulesDir: "manual" —— 必须先补齐 node_modules,
+      # 否则 deno check 会因缺包失败(见 AGENTS.md「Commands」)。
+      - name: Install dependencies
+        run: deno install
+
+      # deno fmt --check . && deno lint . && deno check
+      - name: Static checks (fmt + lint + type-check)
+        run: deno task check
+
+      - name: Run tests
+        run: deno test -A
+
+      # 验证 Fresh / Vite 生产构建无误(deno task build = vite build)。
+      - name: Build
+        run: deno task build
