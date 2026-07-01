@@ -4,6 +4,7 @@ import { json } from "../../../../lib/response.ts";
 import {
   deleteApiKey,
   updateApiKey,
+  UpstreamApiKeySyncError,
 } from "../../../../services/api_key_service.ts";
 import { readJson, routeId } from "../../../../lib/request.ts";
 
@@ -16,9 +17,16 @@ export const handler = define.handlers({
   async PATCH(ctx) {
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
-    return json(
-      await updateApiKey(routeId(ctx.params), await readJson(ctx.req) ?? {}),
-    );
+    try {
+      return json(
+        await updateApiKey(routeId(ctx.params), await readJson(ctx.req) ?? {}),
+      );
+    } catch (error) {
+      if (error instanceof UpstreamApiKeySyncError) {
+        return json({ error: error.message }, 502);
+      }
+      throw error;
+    }
   },
   async DELETE(ctx) {
     const unauthorized = requireAdmin(ctx.req);

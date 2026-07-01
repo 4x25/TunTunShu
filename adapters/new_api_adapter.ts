@@ -54,6 +54,21 @@ export class NewApiAdapter {
     });
   }
 
+  async updateTokenStatus(
+    auth: NewApiUserAuth,
+    tokenId: number,
+    status: number,
+  ): Promise<Response> {
+    return await fetch(`${auth.origin}/api/token/?status_only=true`, {
+      method: "PUT",
+      headers: {
+        ...this.userHeaders(auth),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: tokenId, status }),
+    });
+  }
+
   async getModels(auth: NewApiKeyAuth): Promise<Response> {
     return await fetch(`${auth.origin}/v1/models`, {
       headers: this.apiKeyHeaders(auth),

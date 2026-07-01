@@ -1,8 +1,58 @@
 import { getSql } from "../db/client.ts";
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
+import {
+  findUpstreamTokenIdByKey,
+  setUpstreamTokenEnabled,
+} from "./new_api_token_service.ts";
 
 const adapter = new NewApiAdapter();
+
+export class UpstreamApiKeySyncError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UpstreamApiKeySyncError";
+  }
+}
+
+interface ApiKeyUpdateRow {
+  name: string;
+  key: string;
+  enabled: boolean;
+  user_id: string;
+  access_token: string;
+  origin: string;
+}
+
+async function syncApiKeyEnabledToUpstream(
+  row: ApiKeyUpdateRow,
+  enabled: boolean,
+) {
+  const auth = {
+    origin: row.origin,
+    userId: row.user_id,
+    accessToken: row.access_token,
+  };
+  const found = await findUpstreamTokenIdByKey(auth, row.key);
+  if (!found.ok || !found.tokenId) {
+    const error = typeof found.data === "object" && found.data &&
+        "error" in found.data
+      ? String(found.data.error)
+      : "";
+    const message = error === "ambiguous_masked_key"
+      ? "上游存在多个遮罩后相同的 APIKey，无法安全启停"
+      : error === "token_lookup_incomplete"
+      ? "上游 APIKey 读取不完整，无法安全启停"
+      : "上游未找到对应 APIKey";
+    throw new UpstreamApiKeySyncError(message);
+  }
+
+  const updated = await setUpstreamTokenEnabled(auth, found.tokenId, enabled);
+  if (!updated.ok) {
+    const message = updated.data.message || "上游拒绝更新 APIKey 状态";
+    throw new UpstreamApiKeySyncError(message);
+  }
+}
 
 export async function createApiKey(
   input: { accountId: number; name: string; key: string },
@@ -26,18 +76,40 @@ export async function updateApiKey(
   input: { name?: string; key?: string; enabled?: boolean },
 ) {
   const sql = getSql();
-  const current = await sql<
-    { name: string; key: string; enabled: boolean }[]
-  >`select name, key, enabled from api_keys where id = ${id}`;
+  const current = await sql<ApiKeyUpdateRow[]>`
+    select api_keys.name, api_keys.key, api_keys.enabled,
+           accounts.user_id, accounts.access_token, sites.origin
+    from api_keys
+    join accounts on accounts.id = api_keys.account_id
+    join sites on sites.id = accounts.site_id
+    where api_keys.id = ${id}
+  `;
   if (!current[0]) return null;
   const name = input.name ?? current[0].name;
   const key = input.key ?? current[0].key;
   const enabled = input.enabled ?? current[0].enabled;
+  const enabledChanged = input.enabled !== undefined &&
+    enabled !== current[0].enabled;
   await sql`
     update api_keys
     set name = ${name}, key = ${key}, enabled = ${enabled}, updated_at = now()
     where id = ${id}
   `;
+  if (enabledChanged) {
+    try {
+      await syncApiKeyEnabledToUpstream(current[0], enabled);
+    } catch (error) {
+      await sql`
+        update api_keys
+        set name = ${current[0].name},
+            key = ${current[0].key},
+            enabled = ${current[0].enabled},
+            updated_at = now()
+        where id = ${id}
+      `;
+      throw error;
+    }
+  }
   return { id, name, enabled };
 }
 
