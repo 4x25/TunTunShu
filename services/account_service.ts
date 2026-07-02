@@ -81,7 +81,7 @@ function tokenLocalStatus(status: number | undefined): string {
 function normalizeListedTokenKey(key: string): string | null {
   const trimmed = key.trim();
   if (!trimmed || trimmed.includes("*")) return null;
-  return trimmed.startsWith("sk-") ? trimmed : `sk-${trimmed}`;
+  return trimmed;
 }
 
 async function findAccountWithOrigin(

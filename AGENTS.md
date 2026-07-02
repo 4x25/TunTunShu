@@ -221,7 +221,7 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
 
 **Token 发现流程**(`account_service.syncAccountApiKeys`,手动专用):分页
 listTokens(每页最多 100) → 优先使用旧版 listTokens item 中的明文
-`key`(非空且不含 `*`,写入前补 `sk-` 前缀),否则对 `{id}` 调 getTokenKey → 按
+`key`(非空且不含 `*`,原样 trim 后写入),否则对 `{id}` 调 getTokenKey → 按
 `(account_id, key)` upsert 进 `api_keys`,并用上游 token.status 同步本地
 `api_keys.enabled` (new-api:1=启用,2=禁用,3=过期,4=额度耗尽;本地仅 1 视作
 enabled=true)。高版本 listTokens 可能返回脱敏 `key`,不得直接使用。仅当 token
