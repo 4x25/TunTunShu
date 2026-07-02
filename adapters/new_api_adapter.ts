@@ -9,6 +9,9 @@ export interface NewApiKeyAuth {
   apiKey: string;
 }
 
+const NEW_API_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0";
+
 export class NewApiAdapter {
   async healthCheck(origin: string): Promise<Response> {
     return await fetch(`${origin}/`);
@@ -40,7 +43,7 @@ export class NewApiAdapter {
   async listTokens(
     auth: NewApiUserAuth,
     page = 1,
-    size = 20,
+    size = 100,
   ): Promise<Response> {
     return await fetch(`${auth.origin}/api/token/?p=${page}&size=${size}`, {
       headers: this.userHeaders(auth),
@@ -48,10 +51,31 @@ export class NewApiAdapter {
   }
 
   async getTokenKey(auth: NewApiUserAuth, tokenId: number): Promise<Response> {
-    return await fetch(`${auth.origin}/api/token/${tokenId}/key`, {
+    const url = `${auth.origin}/api/token/${tokenId}/key`;
+    const withMethod = (response: Response, method: "POST" | "GET") => {
+      const headers = new Headers(response.headers);
+      headers.set("x-tts-token-key-method", method);
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    };
+
+    const post = await fetch(url, {
       method: "POST",
       headers: this.userHeaders(auth),
     });
+    if (post.status !== 404 && post.status !== 405) {
+      return withMethod(post, "POST");
+    }
+
+    await post.body?.cancel();
+    const get = await fetch(url, {
+      method: "GET",
+      headers: this.userHeaders(auth),
+    });
+    return withMethod(get, "GET");
   }
 
   async getModels(auth: NewApiKeyAuth): Promise<Response> {
@@ -80,6 +104,7 @@ export class NewApiAdapter {
     return {
       Authorization: `Bearer ${auth.accessToken}`,
       "new-api-user": auth.userId,
+      "User-Agent": NEW_API_USER_AGENT,
     };
   }
 
