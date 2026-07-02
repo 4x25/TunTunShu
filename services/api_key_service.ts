@@ -75,6 +75,10 @@ export async function updateApiKey(
   id: number,
   input: { name?: string; key?: string; enabled?: boolean },
 ) {
+  if (input.key !== undefined && input.enabled !== undefined) {
+    throw new UpstreamApiKeySyncError("不能同时修改 APIKey 内容和启停状态");
+  }
+
   const sql = getSql();
   const current = await sql<ApiKeyUpdateRow[]>`
     select api_keys.name, api_keys.key, api_keys.enabled,

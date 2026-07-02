@@ -110,6 +110,14 @@ export async function findUpstreamTokenIdByKey(
     }
   }
 
+  if (incomplete && maskedMatches.length > 0) {
+    return {
+      ok: false,
+      tokenId: null,
+      data: { error: "token_lookup_incomplete" },
+    };
+  }
+
   if (maskedMatches.length === 1) {
     return {
       ok: true,
