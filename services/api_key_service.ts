@@ -21,6 +21,26 @@ export async function listApiKeys(params: PageParams) {
   const sql = getSql();
   const values: Array<number | string> = [];
   const where: string[] = [];
+  const needsAccounts = Boolean(
+    params.siteId !== undefined || params.siteQ || params.accountQ,
+  );
+  const needsSites = Boolean(params.siteQ);
+  const needsModels = Boolean(params.modelQ);
+  const fromSql = `
+    from api_keys
+    ${needsAccounts ? "join accounts on accounts.id = api_keys.account_id" : ""}
+    ${needsSites ? "join sites on sites.id = accounts.site_id" : ""}
+    ${
+    needsModels
+      ? "join upstream_models on upstream_models.api_key_id = api_keys.id"
+      : ""
+  }
+    ${
+    needsModels
+      ? "left join models on models.id = upstream_models.model_id"
+      : ""
+  }
+  `;
   if (params.siteId !== undefined) {
     values.push(params.siteId);
     where.push(`accounts.site_id = $${values.length}`);
@@ -29,24 +49,38 @@ export async function listApiKeys(params: PageParams) {
     values.push(params.accountId);
     where.push(`api_keys.account_id = $${values.length}`);
   }
-  if (params.q) {
-    values.push(`%${params.q}%`);
+  if (params.siteQ) {
+    values.push(`%${params.siteQ}%`);
+    where.push(
+      `(sites.name ilike $${values.length} or sites.origin ilike $${values.length})`,
+    );
+  }
+  if (params.accountQ) {
+    values.push(`%${params.accountQ}%`);
+    where.push(
+      `(accounts.name ilike $${values.length} or accounts.user_id ilike $${values.length})`,
+    );
+  }
+  if (params.apiKeyQ) {
+    values.push(`%${params.apiKeyQ}%`);
     where.push(
       `(api_keys.name ilike $${values.length} or api_keys.key ilike $${values.length})`,
     );
   }
+  if (params.modelQ) {
+    values.push(`%${params.modelQ}%`);
+    where.push(
+      `(upstream_models.name ilike $${values.length} or models.name ilike $${values.length})`,
+    );
+  }
   const whereSql = where.length ? `where ${where.join(" and ")}` : "";
-  const fromSql = `
-    from api_keys
-    join accounts on accounts.id = api_keys.account_id
-  `;
   const countRows = await sql.unsafe<{ count: number }[]>(
-    `select count(*)::int as count ${fromSql} ${whereSql}`,
+    `select count(distinct api_keys.id)::int as count ${fromSql} ${whereSql}`,
     values,
   );
   const pageValues = [...values, params.pageSize, params.offset];
   const items = await sql.unsafe(
-    `select api_keys.* ${fromSql} ${whereSql}
+    `select distinct api_keys.* ${fromSql} ${whereSql}
      order by api_keys.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
     pageValues,

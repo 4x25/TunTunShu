@@ -201,12 +201,32 @@ export function useUpstreamPages(
   const accountReq = useRef(0);
   const keyReq = useRef(0);
   const umReq = useRef(0);
-  const siteKey = listKey("sites", PAGE_SIZE, qSite);
-  const accountKey = listKey("accounts", PAGE_SIZE, qAcc, sel.site);
-  const keyKey = listKey("api-keys", PAGE_SIZE, qKey, sel.site, sel.account);
+  const siteKey = listKey("sites", PAGE_SIZE, qSite, qAcc, qKey, qMod);
+  const accountKey = listKey(
+    "accounts",
+    PAGE_SIZE,
+    qSite,
+    qAcc,
+    qKey,
+    qMod,
+    sel.site,
+  );
+  const keyKey = listKey(
+    "api-keys",
+    PAGE_SIZE,
+    qSite,
+    qAcc,
+    qKey,
+    qMod,
+    sel.site,
+    sel.account,
+  );
   const umKey = listKey(
     "upstream-models",
     PAGE_SIZE,
+    qSite,
+    qAcc,
+    qKey,
     qMod,
     sel.site,
     sel.account,
@@ -239,7 +259,7 @@ export function useUpstreamPages(
       mode,
       key: siteKey,
       path: "/sites",
-      params: { q: qSite },
+      params: { siteQ: qSite, accountQ: qAcc, apiKeyQ: qKey, modelQ: qMod },
     });
   }
 
@@ -251,7 +271,13 @@ export function useUpstreamPages(
       mode,
       key: accountKey,
       path: "/accounts",
-      params: { q: qAcc, siteId: sel.site },
+      params: {
+        siteQ: qSite,
+        accountQ: qAcc,
+        apiKeyQ: qKey,
+        modelQ: qMod,
+        siteId: sel.site,
+      },
     });
   }
 
@@ -263,7 +289,14 @@ export function useUpstreamPages(
       mode,
       key: keyKey,
       path: "/api-keys",
-      params: { q: qKey, siteId: sel.site, accountId: sel.account },
+      params: {
+        siteQ: qSite,
+        accountQ: qAcc,
+        apiKeyQ: qKey,
+        modelQ: qMod,
+        siteId: sel.site,
+        accountId: sel.account,
+      },
     });
   }
 
@@ -276,7 +309,10 @@ export function useUpstreamPages(
       key: umKey,
       path: "/upstream-models",
       params: {
-        q: qMod,
+        siteQ: qSite,
+        accountQ: qAcc,
+        apiKeyQ: qKey,
+        modelQ: qMod,
         siteId: sel.site,
         accountId: sel.account,
         apiKeyId: sel.key,
@@ -328,16 +364,16 @@ export function useUpstreamPages(
   }, []);
   useEffect(() => {
     void loadSites("replace");
-  }, [qSite]);
+  }, [qSite, qAcc, qKey, qMod]);
   useEffect(() => {
     void loadAccounts("replace");
-  }, [qAcc, sel.site]);
+  }, [qSite, qAcc, qKey, qMod, sel.site]);
   useEffect(() => {
     void loadKeys("replace");
-  }, [qKey, sel.site, sel.account]);
+  }, [qSite, qAcc, qKey, qMod, sel.site, sel.account]);
   useEffect(() => {
     void loadUms("replace");
-  }, [qMod, sel.site, sel.account, sel.key]);
+  }, [qSite, qAcc, qKey, qMod, sel.site, sel.account, sel.key]);
 
   return {
     sitePage,

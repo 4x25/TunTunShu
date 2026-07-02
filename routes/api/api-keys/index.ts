@@ -14,7 +14,9 @@ export const handler = define.handlers({
     if (unauthorized) return unauthorized;
     try {
       return json(
-        await listApiKeys(parsePageParams(ctx.req, ["siteId", "accountId"])),
+        await listApiKeys(
+          parsePageParams(ctx.req, ["siteId", "accountId"], "apiKeyQ"),
+        ),
       );
     } catch (error) {
       if (error instanceof PageParamError) {

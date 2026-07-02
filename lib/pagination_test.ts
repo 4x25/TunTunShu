@@ -28,6 +28,10 @@ Deno.test("parsePageParams 使用默认分页", () => {
     pageIndex: 1,
     offset: 0,
     q: "",
+    siteQ: "",
+    accountQ: "",
+    apiKeyQ: "",
+    modelQ: "",
   });
 });
 
@@ -37,13 +41,19 @@ Deno.test("parsePageParams pageSize 最大为 50", () => {
     pageIndex: 2,
     offset: 50,
     q: "",
+    siteQ: "",
+    accountQ: "",
+    apiKeyQ: "",
+    modelQ: "",
   });
 });
 
 Deno.test("parsePageParams 解析搜索词和父级 id", () => {
   assertEquals(
     parsePageParams(
-      req("?pageSize=20&pageIndex=3&q=%20abc%20&siteId=11&accountId=22"),
+      req(
+        "?pageSize=20&pageIndex=3&q=%20abc%20&siteQ=s&accountQ=a&apiKeyQ=k&modelQ=m&siteId=11&accountId=22",
+      ),
       ["siteId", "accountId"],
     ),
     {
@@ -51,10 +61,37 @@ Deno.test("parsePageParams 解析搜索词和父级 id", () => {
       pageIndex: 3,
       offset: 40,
       q: "abc",
+      siteQ: "s",
+      accountQ: "a",
+      apiKeyQ: "k",
+      modelQ: "m",
       siteId: 11,
       accountId: 22,
     },
   );
+});
+
+Deno.test("parsePageParams q 按接口别名映射到路径搜索字段", () => {
+  assertEquals(parsePageParams(req("?q=%20abc%20"), [], "modelQ"), {
+    pageSize: 50,
+    pageIndex: 1,
+    offset: 0,
+    q: "abc",
+    siteQ: "",
+    accountQ: "",
+    apiKeyQ: "",
+    modelQ: "abc",
+  });
+  assertEquals(parsePageParams(req("?q=old&modelQ=new"), [], "modelQ"), {
+    pageSize: 50,
+    pageIndex: 1,
+    offset: 0,
+    q: "old",
+    siteQ: "",
+    accountQ: "",
+    apiKeyQ: "",
+    modelQ: "new",
+  });
 });
 
 Deno.test("parsePageParams 非法参数返回 PageParamError", () => {

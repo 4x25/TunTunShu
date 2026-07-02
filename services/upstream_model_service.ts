@@ -18,8 +18,26 @@ export async function listUpstreamModels(params: PageParams) {
     values.push(params.apiKeyId);
     where.push(`upstream_models.api_key_id = $${values.length}`);
   }
-  if (params.q) {
-    values.push(`%${params.q}%`);
+  if (params.siteQ) {
+    values.push(`%${params.siteQ}%`);
+    where.push(
+      `(sites.name ilike $${values.length} or sites.origin ilike $${values.length})`,
+    );
+  }
+  if (params.accountQ) {
+    values.push(`%${params.accountQ}%`);
+    where.push(
+      `(accounts.name ilike $${values.length} or accounts.user_id ilike $${values.length})`,
+    );
+  }
+  if (params.apiKeyQ) {
+    values.push(`%${params.apiKeyQ}%`);
+    where.push(
+      `(api_keys.name ilike $${values.length} or api_keys.key ilike $${values.length})`,
+    );
+  }
+  if (params.modelQ) {
+    values.push(`%${params.modelQ}%`);
     where.push(
       `(upstream_models.name ilike $${values.length} or models.name ilike $${values.length})`,
     );
@@ -29,15 +47,16 @@ export async function listUpstreamModels(params: PageParams) {
     from upstream_models
     join api_keys on api_keys.id = upstream_models.api_key_id
     join accounts on accounts.id = api_keys.account_id
+    join sites on sites.id = accounts.site_id
     left join models on models.id = upstream_models.model_id
   `;
   const countRows = await sql.unsafe<{ count: number }[]>(
-    `select count(*)::int as count ${fromSql} ${whereSql}`,
+    `select count(distinct upstream_models.id)::int as count ${fromSql} ${whereSql}`,
     values,
   );
   const pageValues = [...values, params.pageSize, params.offset];
   const items = await sql.unsafe(
-    `select upstream_models.* ${fromSql} ${whereSql}
+    `select distinct upstream_models.* ${fromSql} ${whereSql}
      order by upstream_models.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
     pageValues,

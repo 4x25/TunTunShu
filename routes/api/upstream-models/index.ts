@@ -11,7 +11,11 @@ export const handler = define.handlers({
     try {
       return json(
         await listUpstreamModels(
-          parsePageParams(ctx.req, ["siteId", "accountId", "apiKeyId"]),
+          parsePageParams(
+            ctx.req,
+            ["siteId", "accountId", "apiKeyId"],
+            "modelQ",
+          ),
         ),
       );
     } catch (error) {

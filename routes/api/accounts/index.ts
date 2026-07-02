@@ -14,7 +14,9 @@ export const handler = define.handlers({
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
     try {
-      return json(await listAccounts(parsePageParams(ctx.req, ["siteId"])));
+      return json(
+        await listAccounts(parsePageParams(ctx.req, ["siteId"], "accountQ")),
+      );
     } catch (error) {
       if (error instanceof PageParamError) {
         return json({ error: error.message }, 400);
