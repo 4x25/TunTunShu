@@ -1,11 +1,154 @@
 import { getSql } from "../db/client.ts";
-import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
+import {
+  NewApiAdapter,
+  type NewApiUserAuth,
+} from "../adapters/new_api_adapter.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
 import { isUniqueViolation } from "./site_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
 
 const adapter = new NewApiAdapter();
+const TOKEN_PAGE_SIZE = 100;
+
+interface AccountWithOrigin {
+  id: number;
+  site_id: number;
+  user_id: string;
+  access_token: string;
+  origin: string;
+}
+
+interface UpstreamToken {
+  id: number;
+  name?: string;
+  status?: number;
+  key?: string;
+}
+
+interface AccountApiKeySyncResult {
+  ok: boolean;
+  count: number;
+  newKeys?: number;
+  pruned?: number;
+  modelSyncs?: Awaited<ReturnType<typeof syncApiKeyModels>>[];
+  error?: string;
+}
+
+interface SyncAccountApiKeysOptions {
+  syncNewModels?: boolean;
+}
+
+function accountAuth(account: AccountWithOrigin): NewApiUserAuth {
+  return {
+    origin: account.origin,
+    userId: account.user_id,
+    accessToken: account.access_token,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function responseMessage(
+  data: { message?: unknown },
+  fallback: string,
+): string {
+  return typeof data.message === "string" && data.message.trim()
+    ? data.message
+    : fallback;
+}
+
+function upstreamFailure(
+  action: string,
+  response: Response,
+  data: { message?: unknown },
+): string {
+  return `${action}失败: ${responseMessage(data, `HTTP ${response.status}`)}`;
+}
+
+function tokenEnabled(status: number | undefined): boolean {
+  return typeof status === "number" ? status === 1 : true;
+}
+
+function tokenLocalStatus(status: number | undefined): string {
+  if (status === 3) return "invalid";
+  if (status === 4) return "quota_empty";
+  return "healthy";
+}
+
+function normalizeListedTokenKey(key: string): string | null {
+  const trimmed = key.trim();
+  if (!trimmed || trimmed.includes("*")) return null;
+  return trimmed;
+}
+
+async function findAccountWithOrigin(
+  id: number,
+): Promise<AccountWithOrigin | null> {
+  const sql = getSql();
+  const rows = await sql<AccountWithOrigin[]>`
+    select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, sites.origin
+    from accounts
+    join sites on sites.id = accounts.site_id
+    where accounts.id = ${id}
+  `;
+  return rows[0] ?? null;
+}
+
+async function listAllAccountTokens(
+  account: AccountWithOrigin,
+): Promise<UpstreamToken[]> {
+  const tokens: UpstreamToken[] = [];
+  let seenItems = 0;
+  let page = 1;
+  while (true) {
+    const response = await adapter.listTokens(
+      accountAuth(account),
+      page,
+      TOKEN_PAGE_SIZE,
+    );
+    const data = await response.json().catch(() => ({})) as {
+      success?: boolean;
+      message?: unknown;
+      data?: {
+        total?: number;
+        items?: Array<{
+          id?: number;
+          name?: string;
+          status?: number;
+          key?: string;
+        }>;
+      };
+    };
+    if (!response.ok || data.success !== true) {
+      throw new Error(upstreamFailure("列出上游 APIKey", response, data));
+    }
+
+    const items = Array.isArray(data.data?.items) ? data.data.items : [];
+    seenItems += items.length;
+    for (const item of items) {
+      if (typeof item.id !== "number") continue;
+      tokens.push({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        key: typeof item.key === "string"
+          ? normalizeListedTokenKey(item.key) ??
+            undefined
+          : undefined,
+      });
+    }
+
+    const total = typeof data.data?.total === "number" ? data.data.total : null;
+    if (items.length === 0) break;
+    if (total != null && seenItems >= total) break;
+    if (items.length < TOKEN_PAGE_SIZE) break;
+    page += 1;
+  }
+  return tokens;
+}
 
 /** 请求 origin 的 /api/user/self,取 new-api 用户名(data.username);失败返回 null。 */
 export async function fetchUsername(
@@ -225,82 +368,101 @@ export async function syncAccountQuota(id: number) {
   }
 }
 
-export async function syncAccountApiKeys(id: number) {
+export async function syncAccountApiKeys(
+  id: number,
+  options: SyncAccountApiKeysOptions = {},
+): Promise<AccountApiKeySyncResult | null> {
   const sql = getSql();
-  const rows = await sql<
-    {
-      id: number;
-      site_id: number;
-      user_id: string;
-      access_token: string;
-      origin: string;
-    }[]
-  >`
-    select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, sites.origin
-    from accounts
-    join sites on sites.id = accounts.site_id
-    where accounts.id = ${id}
-  `;
-  const account = rows[0];
+  const account = await findAccountWithOrigin(id);
   if (!account) return null;
 
   try {
-    const response = await adapter.listTokens({
-      origin: account.origin,
-      userId: account.user_id,
-      accessToken: account.access_token,
-    });
-    const data = await response.json().catch(() => ({})) as {
-      success?: boolean;
-      data?: { items?: Array<{ id?: number; name?: string }> };
-    };
-    // new-api 即使 access token 失效也返回 HTTP 200,业务成败在 body.success。
-    const ok = response.ok && data.success === true;
-    const items = ok && Array.isArray(data.data?.items) ? data.data.items : [];
+    const tokens = await listAllAccountTokens(account);
     let synced = 0;
+    const syncedLocalIds = new Set<number>();
+    const newModelKeyIds: number[] = [];
 
-    for (const item of items) {
-      if (!item.id) continue;
-      const keyResponse = await adapter.getTokenKey({
-        origin: account.origin,
-        userId: account.user_id,
-        accessToken: account.access_token,
-      }, item.id);
-      const keyData = await keyResponse.json().catch(() => ({})) as {
-        data?: { key?: string };
-      };
-      const key = keyData.data?.key;
-      if (!key) continue;
+    for (const item of tokens) {
+      let key = item.key;
+      if (!key) {
+        const keyResponse = await adapter.getTokenKey({
+          origin: account.origin,
+          userId: account.user_id,
+          accessToken: account.access_token,
+        }, item.id);
+        const keyData = await keyResponse.json().catch(() => ({})) as {
+          success?: boolean;
+          message?: unknown;
+          data?: { key?: string };
+        };
+        key = keyData.data?.key;
+        if (!keyResponse.ok || keyData.success !== true || !key) {
+          throw new Error(
+            upstreamFailure("读取上游 APIKey 明文", keyResponse, keyData),
+          );
+        }
+      }
+      const name = item.name ?? `Token ${item.id}`;
+      const enabled = tokenEnabled(item.status);
+      const status = tokenLocalStatus(item.status);
       const existing = await sql<{ id: number }[]>`
         select id from api_keys where account_id = ${id} and key = ${key} limit 1
       `;
       if (existing[0]) {
         await sql`
           update api_keys
-          set name = ${
-          item.name ?? `Token ${item.id}`
-        }, status = 'healthy', updated_at = now()
+          set name = ${name}, enabled = ${enabled}, status = ${status}, updated_at = now()
           where id = ${existing[0].id}
         `;
+        syncedLocalIds.add(existing[0].id);
       } else {
-        await sql`
-          insert into api_keys (account_id, name, key, status)
-          values (${id}, ${item.name ?? `Token ${item.id}`}, ${key}, 'healthy')
+        const inserted = await sql<{ id: number }[]>`
+          insert into api_keys (account_id, name, key, enabled, status)
+          values (${id}, ${name}, ${key}, ${enabled}, ${status})
+          returning id
         `;
+        if (inserted[0]) {
+          syncedLocalIds.add(inserted[0].id);
+          if (enabled) newModelKeyIds.push(inserted[0].id);
+        }
       }
       synced += 1;
     }
 
+    let pruned = 0;
+    const localKeys = await sql<{ id: number }[]>`
+      select id from api_keys where account_id = ${id}
+    `;
+    for (const local of localKeys) {
+      if (syncedLocalIds.has(local.id)) continue;
+      await sql`delete from upstream_models where api_key_id = ${local.id}`;
+      await sql`delete from api_keys where id = ${local.id}`;
+      pruned += 1;
+    }
+
+    const modelSyncs = options.syncNewModels ?? true
+      ? await Promise.all(
+        newModelKeyIds.map((keyId) => syncApiKeyModels(keyId)),
+      )
+      : [];
+
     await createSystemTaskLog({
       taskType: "account_api_key_sync",
-      status: ok ? "success" : "failed",
+      status: "success",
       siteId: account.site_id,
       accountId: account.id,
-      message: `api_keys=${synced}`,
+      message:
+        `api_keys=${synced} new_keys=${newModelKeyIds.length} pruned=${pruned} model_syncs=${modelSyncs.length}`,
     });
-    return { ok, count: synced };
+    return {
+      ok: true,
+      count: synced,
+      newKeys: newModelKeyIds.length,
+      pruned,
+      modelSyncs,
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     await createSystemTaskLog({
       taskType: "account_api_key_sync",
       status: "failed",
@@ -308,7 +470,7 @@ export async function syncAccountApiKeys(id: number) {
       accountId: account.id,
       message,
     });
-    return { ok: false, error: message };
+    return { ok: false, count: 0, error: message };
   }
 }
 
@@ -322,7 +484,7 @@ export async function refreshAccount(id: number) {
   // 额度与 ApiKey 互不依赖(分别只写 accounts / api_keys),并发执行
   const [quota, keys] = await Promise.all([
     syncAccountQuota(id),
-    syncAccountApiKeys(id),
+    syncAccountApiKeys(id, { syncNewModels: false }),
   ]);
   // ApiKey 拉完后,账号下每个 Key 并发拉模型(各自作用于不同 api_key 的 upstream_models)
   const rows = await sql<{ id: number }[]>`

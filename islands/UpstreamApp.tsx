@@ -516,11 +516,26 @@ export default function UpstreamApp() {
     });
   const syncKeys = (a: Account) =>
     act("sk" + a.id, async () => {
-      const r = await apiSend<{ count?: number }>(
+      const r = await apiSend<{
+        ok?: boolean;
+        count?: number;
+        newKeys?: number;
+        modelSyncs?: Array<{ ok?: boolean; count?: number } | null>;
+        error?: string;
+      }>(
         "POST",
         `/accounts/${a.id}/sync-api-keys`,
       );
-      return `「${a.name}」发现 ${r.count ?? 0} 个 APIKey`;
+      if (r.ok === false) throw new Error(r.error ?? "拉Key失败");
+      const modelSyncs = r.modelSyncs ?? [];
+      const modelCount = modelSyncs.reduce(
+        (sum, item) => sum + (item?.count ?? 0),
+        0,
+      );
+      const newPart = (r.newKeys ?? 0) > 0
+        ? `，新增 ${r.newKeys} 个，已自动拉取 ${modelSyncs.length} 个 Key 的模型(${modelCount} 个)`
+        : "";
+      return `「${a.name}」发现 ${r.count ?? 0} 个 APIKey${newPart}`;
     });
   const syncModels = (k: ApiKey) =>
     act("sm" + k.id, async () => {
