@@ -1,5 +1,6 @@
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { getSql } from "../db/client.ts";
+import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 
 const adapter = new NewApiAdapter();
@@ -90,9 +91,29 @@ export async function createSite(input: {
   }
 }
 
-export async function listSites() {
+export async function listSites(params: PageParams) {
   const sql = getSql();
-  return await sql`select * from sites order by id desc`;
+  const values: Array<number | string> = [];
+  const where: string[] = [];
+  if (params.q) {
+    values.push(`%${params.q}%`);
+    where.push(
+      `(name ilike $${values.length} or origin ilike $${values.length})`,
+    );
+  }
+  const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+  const countRows = await sql.unsafe<{ count: number }[]>(
+    `select count(*)::int as count from sites ${whereSql}`,
+    values,
+  );
+  const pageValues = [...values, params.pageSize, params.offset];
+  const items = await sql.unsafe(
+    `select * from sites ${whereSql} order by id desc limit $${
+      values.length + 1
+    } offset $${values.length + 2}`,
+    pageValues,
+  );
+  return pageResult(items, params, Number(countRows[0]?.count ?? 0));
 }
 
 export async function updateSite(

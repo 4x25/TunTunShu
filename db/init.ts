@@ -61,6 +61,10 @@ export async function initializeDatabase() {
     );
   }
   await sql`
+    create index if not exists accounts_site_id_id_idx
+      on accounts (site_id, id desc)
+  `;
+  await sql`
     create table if not exists api_keys (
       id bigserial primary key,
       account_id bigint not null,
@@ -72,6 +76,10 @@ export async function initializeDatabase() {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
+  `;
+  await sql`
+    create index if not exists api_keys_account_id_id_idx
+      on api_keys (account_id, id desc)
   `;
   await sql`
     create table if not exists models (
@@ -96,6 +104,10 @@ export async function initializeDatabase() {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
+  `;
+  await sql`
+    create index if not exists upstream_models_api_key_id_id_idx
+      on upstream_models (api_key_id, id desc)
   `;
   // endpoint_type 为后加列:对已存在的库用 add column if not exists 幂等补列。
   await sql`

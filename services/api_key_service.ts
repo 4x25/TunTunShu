@@ -1,5 +1,6 @@
 import { getSql } from "../db/client.ts";
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
+import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 
 const adapter = new NewApiAdapter();
@@ -16,9 +17,41 @@ export async function createApiKey(
   return rows[0]?.id ?? null;
 }
 
-export async function listApiKeys() {
+export async function listApiKeys(params: PageParams) {
   const sql = getSql();
-  return await sql`select * from api_keys order by id desc`;
+  const values: Array<number | string> = [];
+  const where: string[] = [];
+  if (params.siteId !== undefined) {
+    values.push(params.siteId);
+    where.push(`accounts.site_id = $${values.length}`);
+  }
+  if (params.accountId !== undefined) {
+    values.push(params.accountId);
+    where.push(`api_keys.account_id = $${values.length}`);
+  }
+  if (params.q) {
+    values.push(`%${params.q}%`);
+    where.push(
+      `(api_keys.name ilike $${values.length} or api_keys.key ilike $${values.length})`,
+    );
+  }
+  const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+  const fromSql = `
+    from api_keys
+    join accounts on accounts.id = api_keys.account_id
+  `;
+  const countRows = await sql.unsafe<{ count: number }[]>(
+    `select count(*)::int as count ${fromSql} ${whereSql}`,
+    values,
+  );
+  const pageValues = [...values, params.pageSize, params.offset];
+  const items = await sql.unsafe(
+    `select api_keys.* ${fromSql} ${whereSql}
+     order by api_keys.id desc
+     limit $${values.length + 1} offset $${values.length + 2}`,
+    pageValues,
+  );
+  return pageResult(items, params, Number(countRows[0]?.count ?? 0));
 }
 
 export async function updateApiKey(

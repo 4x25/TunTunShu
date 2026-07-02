@@ -1,7 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import { IconClose } from "../components/icons.tsx";
 import { Modal } from "../components/Modal.tsx";
-import { apiGet, apiSend, getToken } from "../components/admin_api.ts";
+import {
+  apiGet,
+  apiSend,
+  fetchAllPages,
+  getToken,
+} from "../components/admin_api.ts";
 
 interface Model {
   id: string;
@@ -65,10 +70,10 @@ export default function ModelsApp() {
     try {
       const [m, u, k, a, s] = await Promise.all([
         apiGet<Model[]>("/models"),
-        apiGet<UpstreamModel[]>("/upstream-models"),
-        apiGet<NamedRow[]>("/api-keys"),
-        apiGet<NamedRow[]>("/accounts"),
-        apiGet<NamedRow[]>("/sites"),
+        fetchAllPages<UpstreamModel>("/upstream-models"),
+        fetchAllPages<NamedRow>("/api-keys"),
+        fetchAllPages<NamedRow>("/accounts"),
+        fetchAllPages<NamedRow>("/sites"),
       ]);
       setModels(m);
       setUms(u);

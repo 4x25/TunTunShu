@@ -3,6 +3,7 @@ import {
   NewApiAdapter,
   type NewApiUserAuth,
 } from "../adapters/new_api_adapter.ts";
+import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
 import { isUniqueViolation } from "./site_service.ts";
@@ -266,11 +267,33 @@ export async function probeAccountUsername(
   });
 }
 
-export async function listAccounts() {
+export async function listAccounts(params: PageParams) {
   const sql = getSql();
-  return await sql`
-    select * from accounts order by id desc
-  `;
+  const values: Array<number | string> = [];
+  const where: string[] = [];
+  if (params.siteId !== undefined) {
+    values.push(params.siteId);
+    where.push(`site_id = $${values.length}`);
+  }
+  if (params.q) {
+    values.push(`%${params.q}%`);
+    where.push(
+      `(name ilike $${values.length} or user_id ilike $${values.length})`,
+    );
+  }
+  const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+  const countRows = await sql.unsafe<{ count: number }[]>(
+    `select count(*)::int as count from accounts ${whereSql}`,
+    values,
+  );
+  const pageValues = [...values, params.pageSize, params.offset];
+  const items = await sql.unsafe(
+    `select * from accounts ${whereSql} order by id desc limit $${
+      values.length + 1
+    } offset $${values.length + 2}`,
+    pageValues,
+  );
+  return pageResult(items, params, Number(countRows[0]?.count ?? 0));
 }
 
 export async function updateAccount(

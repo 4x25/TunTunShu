@@ -31,6 +31,32 @@ export class ApiError extends Error {
   }
 }
 
+export interface PageResult<T> {
+  items: T[];
+  pageSize: number;
+  pageIndex: number;
+  totalCount: number;
+}
+
+type QueryValue = string | number | boolean | null | undefined;
+
+export function withQuery(
+  path: string,
+  params: Record<string, QueryValue>,
+): string {
+  const [base, rawSearch = ""] = path.split("?");
+  const search = new URLSearchParams(rawSearch);
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined || value === "") {
+      search.delete(key);
+    } else {
+      search.set(key, String(value));
+    }
+  }
+  const qs = search.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
 /** 调用 /api/*。401 时清除 token 并跳转登录页。 */
 export async function api(
   path: string,
@@ -54,6 +80,31 @@ export async function api(
 
 export async function apiGet<T = unknown>(path: string): Promise<T> {
   return await (await api(path)).json() as T;
+}
+
+export async function apiPage<T>(
+  path: string,
+  params: Record<string, QueryValue> = {},
+): Promise<PageResult<T>> {
+  return await apiGet<PageResult<T>>(withQuery(path, params));
+}
+
+export async function fetchAllPages<T>(
+  path: string,
+  params: Record<string, QueryValue> = {},
+): Promise<T[]> {
+  const items: T[] = [];
+  let pageIndex = 1;
+  while (true) {
+    const page = await apiPage<T>(path, { ...params, pageIndex, pageSize: 50 });
+    items.push(...page.items);
+    if (
+      page.items.length === 0 ||
+      page.pageIndex * page.pageSize >= page.totalCount
+    ) break;
+    pageIndex += 1;
+  }
+  return items;
 }
 
 export async function apiSend<T = unknown>(
