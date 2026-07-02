@@ -1,0 +1,11 @@
+{
+  "worktree": {
+    "setup": "deno install"
+  },
+  "scripts": {
+    "dev": {
+      "type": "service",
+      "command": "deno task dev"
+    }
+  }
+}
