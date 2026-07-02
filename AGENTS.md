@@ -209,7 +209,8 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
 - **用户级**(`Authorization: Bearer <accessToken>` +
   `new-api-user: <userId>`):checkin `POST /api/user/checkin`、 getCheckinStatus
   `GET /api/user/checkin`、getUserSelf `GET /api/user/self`、listTokens
-  `GET /api/token/?p&size`、 getTokenKey `POST /api/token/:id/key`。
+  `GET /api/token/?p&size`、 getTokenKey `POST /api/token/:id/key`、
+  updateTokenStatus `PUT /api/token/?status_only=true`。
 - **API-Key 级**(仅 `Authorization: Bearer <apiKey>`——此 apiKey 是**上游 token**
   `api_keys.key`,**不是**本地代理 Key):getModels
   `GET /v1/models`、chatCompletions `POST /v1/chat/completions`。
@@ -218,8 +219,15 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
 **new-api 约定**:token 无效时也回 HTTP 200,业务成败在 `body.success`。services
 一律用 `ok = response.ok && data.success === true` 判定。
 
-**Token 发现流程**(`account_service.syncAccountApiKeys`,手动专用):listTokens →
-对每个 `{id}` 调 getTokenKey → 按 `(account_id, key)` upsert 进 `api_keys`。
+**Token 发现流程**(`account_service.syncAccountApiKeys`,手动专用):分页
+listTokens(每页最多 100) → 对每个 `{id}` 调 getTokenKey → 按 `(account_id, key)`
+upsert 进 `api_keys`,并用上游 token.status 同步本地 `api_keys.enabled`
+(new-api:1=启用,2=禁用,3=过期,4=额度耗尽;本地仅 1 视作 enabled=true)。仅当 token
+列表与每个 token key 都完整获取成功时,才把本地同账号但本轮未发现的 `api_keys`
+删除,并先删除归属于该 Key 的 `upstream_models`;若列表失败或任一 key
+获取不完整,跳过删除以避免误删。用户在 TunTunShu 手动启停 APIKey 时,先更新本库
+`api_keys.enabled`,再按本库目标状态调用上游 `PUT /api/token/?status_only=true`;
+上游同步失败则回滚本库本次改动并向前端返回错误。
 
 ## AI SDK test path(services/upstream_model_test_service.ts)
 

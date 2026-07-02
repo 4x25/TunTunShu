@@ -3,9 +3,21 @@ import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
 import { isUniqueViolation } from "./site_service.ts";
+import {
+  listAllAccountTokens,
+  upstreamTokenEnabled,
+} from "./new_api_token_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
 
 const adapter = new NewApiAdapter();
+
+interface AccountApiKeySyncTarget {
+  id: number;
+  site_id: number;
+  user_id: string;
+  access_token: string;
+  origin: string;
+}
 
 /** 请求 origin 的 /api/user/self,取 new-api 用户名(data.username);失败返回 null。 */
 export async function fetchUsername(
@@ -227,15 +239,7 @@ export async function syncAccountQuota(id: number) {
 
 export async function syncAccountApiKeys(id: number) {
   const sql = getSql();
-  const rows = await sql<
-    {
-      id: number;
-      site_id: number;
-      user_id: string;
-      access_token: string;
-      origin: string;
-    }[]
-  >`
+  const rows = await sql<AccountApiKeySyncTarget[]>`
     select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, sites.origin
     from accounts
     join sites on sites.id = accounts.site_id
@@ -245,60 +249,96 @@ export async function syncAccountApiKeys(id: number) {
   if (!account) return null;
 
   try {
-    const response = await adapter.listTokens({
+    const auth = {
       origin: account.origin,
       userId: account.user_id,
       accessToken: account.access_token,
-    });
-    const data = await response.json().catch(() => ({})) as {
-      success?: boolean;
-      data?: { items?: Array<{ id?: number; name?: string }> };
     };
-    // new-api 即使 access token 失效也返回 HTTP 200,业务成败在 body.success。
-    const ok = response.ok && data.success === true;
-    const items = ok && Array.isArray(data.data?.items) ? data.data.items : [];
-    let synced = 0;
+    const tokenList = await listAllAccountTokens(auth);
+    if (!tokenList.ok) {
+      await createSystemTaskLog({
+        taskType: "account_api_key_sync",
+        status: "failed",
+        siteId: account.site_id,
+        accountId: account.id,
+        message: JSON.stringify(tokenList.data).slice(0, 1000),
+      });
+      return { ok: false, count: 0, deleted: 0, data: tokenList.data };
+    }
 
-    for (const item of items) {
-      if (!item.id) continue;
-      const keyResponse = await adapter.getTokenKey({
-        origin: account.origin,
-        userId: account.user_id,
-        accessToken: account.access_token,
-      }, item.id);
+    let synced = 0;
+    let deleted = 0;
+    let completeSnapshot = true;
+    const discoveredKeys = new Set<string>();
+
+    for (const item of tokenList.items) {
+      if (!item.id) {
+        completeSnapshot = false;
+        continue;
+      }
+      const keyResponse = await adapter.getTokenKey(auth, item.id);
       const keyData = await keyResponse.json().catch(() => ({})) as {
         data?: { key?: string };
       };
       const key = keyData.data?.key;
-      if (!key) continue;
-      const existing = await sql<{ id: number }[]>`
-        select id from api_keys where account_id = ${id} and key = ${key} limit 1
+      if (!keyResponse.ok || !key) {
+        completeSnapshot = false;
+        continue;
+      }
+      discoveredKeys.add(key);
+      const existing = await sql<{ id: number; enabled: boolean }[]>`
+        select id, enabled from api_keys where account_id = ${id} and key = ${key} limit 1
       `;
+      const enabled = upstreamTokenEnabled(
+        item.status,
+        existing[0]?.enabled ?? true,
+      );
       if (existing[0]) {
         await sql`
           update api_keys
           set name = ${
           item.name ?? `Token ${item.id}`
-        }, status = 'healthy', updated_at = now()
+        }, enabled = ${enabled}, status = 'healthy', updated_at = now()
           where id = ${existing[0].id}
         `;
       } else {
         await sql`
-          insert into api_keys (account_id, name, key, status)
-          values (${id}, ${item.name ?? `Token ${item.id}`}, ${key}, 'healthy')
+          insert into api_keys (account_id, name, key, enabled, status)
+          values (${id}, ${
+          item.name ?? `Token ${item.id}`
+        }, ${key}, ${enabled}, 'healthy')
         `;
       }
       synced += 1;
     }
 
+    if (completeSnapshot) {
+      const localKeys = await sql<{ id: number; key: string }[]>`
+        select id, key from api_keys where account_id = ${id}
+      `;
+      for (const localKey of localKeys) {
+        if (discoveredKeys.has(localKey.key)) continue;
+        await sql`delete from upstream_models where api_key_id = ${localKey.id}`;
+        await sql`delete from api_keys where id = ${localKey.id}`;
+        deleted += 1;
+      }
+    }
+
     await createSystemTaskLog({
       taskType: "account_api_key_sync",
-      status: ok ? "success" : "failed",
+      status: completeSnapshot ? "success" : "failed",
       siteId: account.site_id,
       accountId: account.id,
-      message: `api_keys=${synced}`,
+      message: `api_keys=${synced}, deleted=${deleted}${
+        completeSnapshot ? "" : ", prune_skipped=incomplete_keys"
+      }`,
     });
-    return { ok, count: synced };
+    return {
+      ok: completeSnapshot,
+      count: synced,
+      deleted,
+      pruneSkipped: !completeSnapshot,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await createSystemTaskLog({
