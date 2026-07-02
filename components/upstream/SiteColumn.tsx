@@ -46,6 +46,9 @@ export function SiteColumn(
         <div class="mcol-titlebar">
           <h3>站点</h3>
           <span class="cnt">{rows.length} / {page.totalCount}</span>
+          {page.refreshing && rows.length > 0 && (
+            <span class="meta faint">刷新中…</span>
+          )}
           <button
             type="button"
             class="btn btn-primary btn-sm add"

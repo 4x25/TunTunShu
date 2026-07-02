@@ -73,6 +73,7 @@ export interface ListPage<T> {
   totalCount: number;
   loading: boolean;
   loadingMore: boolean;
+  refreshing: boolean;
   error: string | null;
 }
 
@@ -93,4 +94,11 @@ export interface Flash {
   ok: boolean;
 }
 
-export type RefreshScope = "all" | "site" | "account" | "key" | "um" | "models";
+export type RefreshScope =
+  | "all"
+  | "site"
+  | "siteOnly"
+  | "account"
+  | "key"
+  | "um"
+  | "models";

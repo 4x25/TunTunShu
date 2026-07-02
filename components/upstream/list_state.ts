@@ -11,6 +11,7 @@ export function emptyPage<T>(): ListPage<T> {
     totalCount: 0,
     loading: false,
     loadingMore: false,
+    refreshing: false,
     error: null,
   };
 }
@@ -27,6 +28,7 @@ export function mergePage<T>(
     totalCount: page.totalCount,
     loading: false,
     loadingMore: false,
+    refreshing: false,
     error: null,
   };
 }
@@ -53,7 +55,9 @@ export function handleColumnScroll<T>(
   page: ListPage<T>,
   loadMore: () => void,
 ) {
-  if (page.loading || page.loadingMore || !hasMore(page)) return;
+  if (page.loading || page.loadingMore || page.refreshing || !hasMore(page)) {
+    return;
+  }
   const el = event.currentTarget;
   if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) loadMore();
 }

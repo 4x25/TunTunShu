@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { apiGet, apiPage } from "../admin_api.ts";
+import { apiGet, apiPage, type PageResult } from "../admin_api.ts";
 import { PAGE_SIZE } from "./constants.ts";
 import { emptyPage, errorMessage, mergePage } from "./list_state.ts";
 import type {
@@ -12,6 +12,171 @@ import type {
   Site,
   UpstreamModel,
 } from "./types.ts";
+
+type LoadMode = "replace" | "revalidate" | "append";
+type PageParams = Record<string, string | number | null | undefined>;
+type PageSetter<T> = (
+  value: ListPage<T> | ((prev: ListPage<T>) => ListPage<T>),
+) => void;
+
+interface CachedPage<T> {
+  items: T[];
+  pageIndex: number;
+  pageSize: number;
+  totalCount: number;
+}
+
+const listCache = new Map<string, CachedPage<unknown>>();
+
+function listKey(...parts: Array<string | number | null | undefined>): string {
+  return JSON.stringify(parts.map((part) => part ?? ""));
+}
+
+function readCache<T>(key: string): CachedPage<T> | null {
+  const cached = listCache.get(key) as CachedPage<T> | undefined;
+  if (!cached) return null;
+  return { ...cached, items: [...cached.items] };
+}
+
+function writeCache<T>(
+  key: string,
+  page: Pick<ListPage<T>, "items" | "pageIndex" | "pageSize" | "totalCount">,
+) {
+  listCache.set(key, {
+    items: [...page.items],
+    pageIndex: page.pageIndex,
+    pageSize: page.pageSize,
+    totalCount: page.totalCount,
+  });
+}
+
+function pageFromCache<T>(cached: CachedPage<T>): ListPage<T> {
+  return {
+    items: [...cached.items],
+    pageIndex: cached.pageIndex,
+    pageSize: cached.pageSize,
+    totalCount: cached.totalCount,
+    loading: false,
+    loadingMore: false,
+    refreshing: true,
+    error: null,
+  };
+}
+
+async function fetchThroughPage<T>(
+  path: string,
+  params: PageParams,
+  targetPageIndex: number,
+): Promise<PageResult<T>> {
+  const pages: PageResult<T>[] = [];
+  const lastWanted = Math.max(1, targetPageIndex);
+  for (let pageIndex = 1; pageIndex <= lastWanted; pageIndex += 1) {
+    const page = await apiPage<T>(path, {
+      ...params,
+      pageIndex,
+      pageSize: PAGE_SIZE,
+    });
+    pages.push(page);
+    if (
+      page.items.length === 0 ||
+      page.pageIndex * page.pageSize >= page.totalCount
+    ) break;
+  }
+  const last = pages[pages.length - 1];
+  return {
+    items: pages.flatMap((page) => page.items),
+    pageIndex: last.pageIndex,
+    pageSize: last.pageSize,
+    totalCount: last.totalCount,
+  };
+}
+
+async function loadCachedPage<T>(
+  {
+    state,
+    setState,
+    req,
+    mode,
+    key,
+    path,
+    params,
+  }: {
+    state: ListPage<T>;
+    setState: PageSetter<T>;
+    req: { current: number };
+    mode: LoadMode;
+    key: string;
+    path: string;
+    params: PageParams;
+  },
+) {
+  const append = mode === "append";
+  if (
+    append &&
+    (state.loading || state.loadingMore || state.refreshing ||
+      state.items.length >= state.totalCount)
+  ) return;
+
+  const cached = append ? null : readCache<T>(key);
+  const targetPageIndex = append ? state.pageIndex + 1 : Math.max(
+    1,
+    mode === "replace"
+      ? cached?.pageIndex ?? 1
+      : state.pageIndex || cached?.pageIndex || 1,
+  );
+  const version = ++req.current;
+
+  setState((prev) => {
+    if (append) {
+      return {
+        ...prev,
+        loading: false,
+        loadingMore: true,
+        refreshing: false,
+        error: null,
+      };
+    }
+    if (mode === "replace" && cached) return pageFromCache(cached);
+    if (mode === "revalidate" && prev.items.length === 0 && cached) {
+      return pageFromCache(cached);
+    }
+    return {
+      ...prev,
+      items: mode === "replace" ? [] : prev.items,
+      pageIndex: mode === "replace" ? 0 : prev.pageIndex,
+      totalCount: mode === "replace" ? 0 : prev.totalCount,
+      loading: mode === "replace" || prev.items.length === 0,
+      loadingMore: false,
+      refreshing: mode === "revalidate" && prev.items.length > 0,
+      error: null,
+    };
+  });
+
+  try {
+    const page = append
+      ? await apiPage<T>(path, {
+        ...params,
+        pageIndex: targetPageIndex,
+        pageSize: PAGE_SIZE,
+      })
+      : await fetchThroughPage<T>(path, params, targetPageIndex);
+    if (version !== req.current) return;
+    setState((prev) => {
+      const next = mergePage(prev, page, append);
+      writeCache(key, next);
+      return next;
+    });
+  } catch (error) {
+    if (version !== req.current) return;
+    setState((prev) => ({
+      ...prev,
+      loading: false,
+      loadingMore: false,
+      refreshing: false,
+      error: errorMessage(error),
+    }));
+  }
+}
 
 export function useUpstreamPages(
   { sel, qSite, qAcc, qKey, qMod }: {
@@ -36,6 +201,17 @@ export function useUpstreamPages(
   const accountReq = useRef(0);
   const keyReq = useRef(0);
   const umReq = useRef(0);
+  const siteKey = listKey("sites", PAGE_SIZE, qSite);
+  const accountKey = listKey("accounts", PAGE_SIZE, qAcc, sel.site);
+  const keyKey = listKey("api-keys", PAGE_SIZE, qKey, sel.site, sel.account);
+  const umKey = listKey(
+    "upstream-models",
+    PAGE_SIZE,
+    qMod,
+    sel.site,
+    sel.account,
+    sel.key,
+  );
 
   async function loadModels() {
     setModels(await apiGet<Model[]>("/models"));
@@ -55,165 +231,72 @@ export function useUpstreamPages(
     setCheckinMsg(cm);
   }
 
-  async function loadSites(append = false) {
-    if (
-      append &&
-      (sitePage.loading || sitePage.loadingMore ||
-        sitePage.items.length >= sitePage.totalCount)
-    ) return;
-    const pageIndex = append ? sitePage.pageIndex + 1 : 1;
-    const version = ++siteReq.current;
-    setSitePage((prev) => ({
-      ...prev,
-      items: append ? prev.items : [],
-      pageIndex: append ? prev.pageIndex : 0,
-      totalCount: append ? prev.totalCount : 0,
-      loading: !append,
-      loadingMore: append,
-      error: null,
-    }));
-    try {
-      const page = await apiPage<Site>("/sites", {
-        pageIndex,
-        pageSize: PAGE_SIZE,
-        q: qSite,
-      });
-      if (version !== siteReq.current) return;
-      setSitePage((prev) => mergePage(prev, page, append));
-    } catch (error) {
-      if (version !== siteReq.current) return;
-      setSitePage((prev) => ({
-        ...prev,
-        loading: false,
-        loadingMore: false,
-        error: errorMessage(error),
-      }));
-    }
+  async function loadSites(mode: LoadMode = "replace") {
+    await loadCachedPage({
+      state: sitePage,
+      setState: setSitePage,
+      req: siteReq,
+      mode,
+      key: siteKey,
+      path: "/sites",
+      params: { q: qSite },
+    });
   }
 
-  async function loadAccounts(append = false) {
-    if (
-      append &&
-      (accountPage.loading || accountPage.loadingMore ||
-        accountPage.items.length >= accountPage.totalCount)
-    ) return;
-    const pageIndex = append ? accountPage.pageIndex + 1 : 1;
-    const version = ++accountReq.current;
-    setAccountPage((prev) => ({
-      ...prev,
-      items: append ? prev.items : [],
-      pageIndex: append ? prev.pageIndex : 0,
-      totalCount: append ? prev.totalCount : 0,
-      loading: !append,
-      loadingMore: append,
-      error: null,
-    }));
-    try {
-      const page = await apiPage<Account>("/accounts", {
-        pageIndex,
-        pageSize: PAGE_SIZE,
-        q: qAcc,
-        siteId: sel.site,
-      });
-      if (version !== accountReq.current) return;
-      setAccountPage((prev) => mergePage(prev, page, append));
-    } catch (error) {
-      if (version !== accountReq.current) return;
-      setAccountPage((prev) => ({
-        ...prev,
-        loading: false,
-        loadingMore: false,
-        error: errorMessage(error),
-      }));
-    }
+  async function loadAccounts(mode: LoadMode = "replace") {
+    await loadCachedPage({
+      state: accountPage,
+      setState: setAccountPage,
+      req: accountReq,
+      mode,
+      key: accountKey,
+      path: "/accounts",
+      params: { q: qAcc, siteId: sel.site },
+    });
   }
 
-  async function loadKeys(append = false) {
-    if (
-      append &&
-      (keyPage.loading || keyPage.loadingMore ||
-        keyPage.items.length >= keyPage.totalCount)
-    ) return;
-    const pageIndex = append ? keyPage.pageIndex + 1 : 1;
-    const version = ++keyReq.current;
-    setKeyPage((prev) => ({
-      ...prev,
-      items: append ? prev.items : [],
-      pageIndex: append ? prev.pageIndex : 0,
-      totalCount: append ? prev.totalCount : 0,
-      loading: !append,
-      loadingMore: append,
-      error: null,
-    }));
-    try {
-      const page = await apiPage<ApiKey>("/api-keys", {
-        pageIndex,
-        pageSize: PAGE_SIZE,
-        q: qKey,
-        siteId: sel.site,
-        accountId: sel.account,
-      });
-      if (version !== keyReq.current) return;
-      setKeyPage((prev) => mergePage(prev, page, append));
-    } catch (error) {
-      if (version !== keyReq.current) return;
-      setKeyPage((prev) => ({
-        ...prev,
-        loading: false,
-        loadingMore: false,
-        error: errorMessage(error),
-      }));
-    }
+  async function loadKeys(mode: LoadMode = "replace") {
+    await loadCachedPage({
+      state: keyPage,
+      setState: setKeyPage,
+      req: keyReq,
+      mode,
+      key: keyKey,
+      path: "/api-keys",
+      params: { q: qKey, siteId: sel.site, accountId: sel.account },
+    });
   }
 
-  async function loadUms(append = false) {
-    if (
-      append &&
-      (umPage.loading || umPage.loadingMore ||
-        umPage.items.length >= umPage.totalCount)
-    ) return;
-    const pageIndex = append ? umPage.pageIndex + 1 : 1;
-    const version = ++umReq.current;
-    setUmPage((prev) => ({
-      ...prev,
-      items: append ? prev.items : [],
-      pageIndex: append ? prev.pageIndex : 0,
-      totalCount: append ? prev.totalCount : 0,
-      loading: !append,
-      loadingMore: append,
-      error: null,
-    }));
-    try {
-      const page = await apiPage<UpstreamModel>("/upstream-models", {
-        pageIndex,
-        pageSize: PAGE_SIZE,
+  async function loadUms(mode: LoadMode = "replace") {
+    await loadCachedPage({
+      state: umPage,
+      setState: setUmPage,
+      req: umReq,
+      mode,
+      key: umKey,
+      path: "/upstream-models",
+      params: {
         q: qMod,
         siteId: sel.site,
         accountId: sel.account,
         apiKeyId: sel.key,
-      });
-      if (version !== umReq.current) return;
-      setUmPage((prev) => mergePage(prev, page, append));
-    } catch (error) {
-      if (version !== umReq.current) return;
-      setUmPage((prev) => ({
-        ...prev,
-        loading: false,
-        loadingMore: false,
-        error: errorMessage(error),
-      }));
-    }
+      },
+    });
   }
 
   async function reloadScope(scope: RefreshScope) {
     const jobs: Promise<void>[] = [];
-    if (scope === "all" || scope === "site") jobs.push(loadSites());
-    if (["all", "site", "account"].includes(scope)) jobs.push(loadAccounts());
+    if (scope === "all" || scope === "site" || scope === "siteOnly") {
+      jobs.push(loadSites("revalidate"));
+    }
+    if (["all", "site", "account"].includes(scope)) {
+      jobs.push(loadAccounts("revalidate"));
+    }
     if (["all", "site", "account", "key"].includes(scope)) {
-      jobs.push(loadKeys());
+      jobs.push(loadKeys("revalidate"));
     }
     if (["all", "site", "account", "key", "um", "models"].includes(scope)) {
-      jobs.push(loadUms());
+      jobs.push(loadUms("revalidate"));
     }
     if (scope === "all" || scope === "models") jobs.push(loadModels());
     if (["all", "site", "account"].includes(scope)) {
@@ -244,16 +327,16 @@ export function useUpstreamPages(
     void loadCheckinLogs();
   }, []);
   useEffect(() => {
-    void loadSites();
+    void loadSites("replace");
   }, [qSite]);
   useEffect(() => {
-    void loadAccounts();
+    void loadAccounts("replace");
   }, [qAcc, sel.site]);
   useEffect(() => {
-    void loadKeys();
+    void loadKeys("replace");
   }, [qKey, sel.site, sel.account]);
   useEffect(() => {
-    void loadUms();
+    void loadUms("replace");
   }, [qMod, sel.site, sel.account, sel.key]);
 
   return {

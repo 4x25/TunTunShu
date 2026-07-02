@@ -246,30 +246,20 @@ export function useResourceDialogs(
           remark: form.remark || null,
         });
         checkSite = modal.id;
-        next = sel.site === modal.id
-          ? { site: modal.id, account: sel.account, key: sel.key }
-          : { site: modal.id, account: null, key: null };
       } else {
         const payload: Record<string, unknown> = { userId: form.userId };
         const nm = form.name?.trim();
         if (nm) payload.name = nm;
         if (form.accessToken) payload.accessToken = form.accessToken;
         await apiSend("PATCH", `/accounts/${modal.id}`, payload);
-        const acc = accounts.find((a) => a.id === modal.id);
-        next = {
-          site: acc?.site_id ?? sel.site,
-          account: modal.id,
-          key: sel.account === modal.id ? sel.key : null,
-        };
       }
-      await reloadScope(
-        modal.type === "site"
-          ? "site"
-          : modal.type === "account"
-          ? "account"
-          : "key",
-      );
-      if (next) {
+      const refreshScope: RefreshScope = modal.type === "site"
+        ? "siteOnly"
+        : modal.type === "account"
+        ? "account"
+        : "key";
+      await reloadScope(refreshScope);
+      if (modal.mode === "create" && next) {
         if (next.site !== sel.site) {
           clearAccountColumn();
           clearKeyColumn();
@@ -307,7 +297,7 @@ export function useResourceDialogs(
         "POST",
         `/sites/${siteId}/health-check`,
       ).catch(() => null);
-      await reloadScope("site");
+      await reloadScope("siteOnly");
       if (r) {
         const label = STATUS_MAP[r.status ?? "unknown"]?.[1] ?? r.status ?? "?";
         showFlash(

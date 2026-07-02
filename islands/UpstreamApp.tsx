@@ -221,7 +221,7 @@ export default function UpstreamApp() {
         await apiSend("PATCH", `/sites/${s.id}`, { enabled: !s.enabled });
         return `站点「${s.name}」已${s.enabled ? "停用" : "启用"}`;
       },
-      "site",
+      "siteOnly",
     );
   const toggleAcc = (a: Account) =>
     act(
@@ -265,7 +265,7 @@ export default function UpstreamApp() {
           r.httpStatus ? ` (HTTP ${r.httpStatus})` : ""
         }`;
       },
-      "site",
+      "siteOnly",
     );
   const checkin = (a: Account) =>
     act(
@@ -327,16 +327,39 @@ export default function UpstreamApp() {
       "key",
     );
 
+  function selectedAccountSiteId() {
+    if (!sel.account) return null;
+    return accounts.find((account) => account.id === sel.account)?.site_id ??
+      null;
+  }
+
+  function selectedKeyAccountId() {
+    if (!sel.key) return null;
+    return keys.find((key) => key.id === sel.key)?.account_id ?? null;
+  }
+
+  function selectedKeySiteId() {
+    const accountId = selectedKeyAccountId();
+    if (!accountId) return null;
+    return accounts.find((account) => account.id === accountId)?.site_id ??
+      null;
+  }
+
   const delSite = (s: Site) => {
     if (!confirm(`删除站点「${s.name}」及其下所有账号/Key/模型？`)) return;
-    clearAccountColumn();
-    clearKeyColumn();
-    clearUmColumn();
+    const clearsSelection = sel.site === s.id ||
+      selectedAccountSiteId() === s.id ||
+      selectedKeySiteId() === s.id;
     act(
       "del",
       async () => {
         await apiSend("DELETE", `/sites/${s.id}`);
-        setSel({ site: null, account: null, key: null });
+        if (clearsSelection) {
+          clearAccountColumn();
+          clearKeyColumn();
+          clearUmColumn();
+          setSel({ site: null, account: null, key: null });
+        }
         return `站点「${s.name}」已删除`;
       },
       "site",
@@ -344,13 +367,17 @@ export default function UpstreamApp() {
   };
   const delAcc = (a: Account) => {
     if (!confirm(`删除账号「${a.name}」及其下所有 Key/模型？`)) return;
-    clearKeyColumn();
-    clearUmColumn();
+    const clearsSelection = sel.account === a.id ||
+      selectedKeyAccountId() === a.id;
     act(
       "del",
       async () => {
         await apiSend("DELETE", `/accounts/${a.id}`);
-        setSel({ account: null, key: null });
+        if (clearsSelection) {
+          clearKeyColumn();
+          clearUmColumn();
+          setSel({ account: null, key: null });
+        }
         return `账号「${a.name}」已删除`;
       },
       "account",
@@ -358,12 +385,15 @@ export default function UpstreamApp() {
   };
   const delKey = (k: ApiKey) => {
     if (!confirm(`删除 Key「${k.name}」及其下模型？`)) return;
-    clearUmColumn();
+    const clearsSelection = sel.key === k.id;
     act(
       "del",
       async () => {
         await apiSend("DELETE", `/api-keys/${k.id}`);
-        setSel({ key: null });
+        if (clearsSelection) {
+          clearUmColumn();
+          setSel({ key: null });
+        }
         return `Key「${k.name}」已删除`;
       },
       "key",
@@ -466,7 +496,7 @@ export default function UpstreamApp() {
           selectedId={sel.site}
           busy={busy}
           onKeywordChange={(value) => setU({ siteKeyword: value })}
-          onLoadMore={() => void loadSites(true)}
+          onLoadMore={() => void loadSites("append")}
           onCreate={() => openCreate("site")}
           onPick={pickSite}
           onToggle={toggleSite}
@@ -483,7 +513,7 @@ export default function UpstreamApp() {
           busy={busy}
           checkinMsg={checkinMsg}
           onKeywordChange={(value) => setU({ accountKeyword: value })}
-          onLoadMore={() => void loadAccounts(true)}
+          onLoadMore={() => void loadAccounts("append")}
           onCreate={() => openCreate("account")}
           onPick={pickAccount}
           onToggle={toggleAcc}
@@ -500,7 +530,7 @@ export default function UpstreamApp() {
           selectedAccountId={sel.account}
           busy={busy}
           onKeywordChange={(value) => setU({ keyKeyword: value })}
-          onLoadMore={() => void loadKeys(true)}
+          onLoadMore={() => void loadKeys("append")}
           onCreate={() => openCreate("apikey")}
           onPick={pickKey}
           onToggle={toggleKey}
@@ -519,7 +549,7 @@ export default function UpstreamApp() {
           openEp={openEp}
           busy={busy}
           onKeywordChange={(value) => setU({ modelKeyword: value })}
-          onLoadMore={() => void loadUms(true)}
+          onLoadMore={() => void loadUms("append")}
           onToggle={toggleUm}
           onEndpointMenuToggle={(id) => {
             setOpenDd(null);
