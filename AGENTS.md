@@ -206,10 +206,11 @@ POST)。
 薄 fetch 封装,每个方法返回原始 Response。**这里描述的是本应用所消费的「上游
 new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头模式:
 
-- **用户级**(`Authorization: Bearer <accessToken>` +
-  `new-api-user: <userId>`):checkin `POST /api/user/checkin`、 getCheckinStatus
+- **用户级**(`Authorization: Bearer <accessToken>` + `new-api-user: <userId>` +
+  Edge-like `User-Agent`):checkin `POST /api/user/checkin`、 getCheckinStatus
   `GET /api/user/checkin`、getUserSelf `GET /api/user/self`、listTokens
-  `GET /api/token/?p&size`、 getTokenKey `POST /api/token/:id/key`。
+  `GET /api/token/?p&size`、 getTokenKey 优先 `POST /api/token/:id/key`(404/405
+  时兼容旧版 `GET /api/token/:id/key`)。
 - **API-Key 级**(仅 `Authorization: Bearer <apiKey>`——此 apiKey 是**上游 token**
   `api_keys.key`,**不是**本地代理 Key):getModels
   `GET /v1/models`、chatCompletions `POST /v1/chat/completions`。
@@ -218,8 +219,17 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
 **new-api 约定**:token 无效时也回 HTTP 200,业务成败在 `body.success`。services
 一律用 `ok = response.ok && data.success === true` 判定。
 
-**Token 发现流程**(`account_service.syncAccountApiKeys`,手动专用):listTokens →
-对每个 `{id}` 调 getTokenKey → 按 `(account_id, key)` upsert 进 `api_keys`。
+**Token 发现流程**(`account_service.syncAccountApiKeys`,手动专用):分页
+listTokens(每页最多 100) → 优先使用旧版 listTokens item 中的明文
+`key`(非空且不含 `*`,写入前补 `sk-` 前缀),否则对 `{id}` 调 getTokenKey → 按
+`(account_id, key)` upsert 进 `api_keys`,并用上游 token.status 同步本地
+`api_keys.enabled` (new-api:1=启用,2=禁用,3=过期,4=额度耗尽;本地仅 1 视作
+enabled=true)。高版本 listTokens 可能返回脱敏 `key`,不得直接使用。仅当 token
+列表与每个 token key 都完整获取成功时,才把本地同账号但本轮未发现的 `api_keys`
+删除,并先删除归属于该 Key 的 `upstream_models`;若列表失败或任一 key
+获取不完整,跳过删除以避免误删。本流程默认会对本轮新增且启用的本地 Key 立即调用
+`syncApiKeyModels` 拉取模型;`refreshAccount`
+内部会关闭该默认,避免账号创建/编辑后的完整刷新重复拉模型。
 
 ## AI SDK test path(services/upstream_model_test_service.ts)
 
@@ -335,8 +345,8 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **UpstreamApp**:4 列 Miller 钻取(站点→账号→Key→模型)带每列搜索。选中项与各列
   搜索词以 URL query 为**唯一事实来源**(`use_url_state.ts`:首帧/SSR 为空以避免
   hydration mismatch,挂载后一帧补上);选中只由点击或 URL 显式触发,**无「候选恰剩
-  一项时自动选中」的隐式收敛**。行操作:站点 检测/编辑/删除,账号
-  签到/拉Key/编辑/删除,Key 拉取模型/删除;启停经
+  一项时自动选中」的隐式收敛**。行操作:站点 检测/编辑/删除,账号 签到/拉Key(新增
+  Key 后自动拉模型)/编辑/删除,Key 拉取模型/删除;启停经
   PATCH。模型叶子:端点类型下拉(PATCH endpointType)、映射下拉(PATCH
   modelId,含「清除映射」→ null 与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
