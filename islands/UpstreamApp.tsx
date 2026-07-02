@@ -517,13 +517,16 @@ export default function UpstreamApp() {
   const syncKeys = (a: Account) =>
     act("sk" + a.id, async () => {
       const r = await apiSend<{
+        ok?: boolean;
         count?: number;
         newKeys?: number;
         modelSyncs?: Array<{ ok?: boolean; count?: number } | null>;
+        error?: string;
       }>(
         "POST",
         `/accounts/${a.id}/sync-api-keys`,
       );
+      if (r.ok === false) throw new Error(r.error ?? "拉Key失败");
       const modelSyncs = r.modelSyncs ?? [];
       const modelCount = modelSyncs.reduce(
         (sum, item) => sum + (item?.count ?? 0),
