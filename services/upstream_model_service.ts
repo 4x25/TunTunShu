@@ -56,8 +56,8 @@ export async function listUpstreamModels(params: PageParams) {
   );
   const pageValues = [...values, params.pageSize, params.offset];
   const items = await sql.unsafe(
-    `select distinct upstream_models.* ${fromSql} ${whereSql}
-     order by upstream_models.id desc
+    `select upstream_models.* ${fromSql} ${whereSql}
+     order by upstream_models.enabled desc, lower(upstream_models.name) asc, upstream_models.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
     pageValues,
   );

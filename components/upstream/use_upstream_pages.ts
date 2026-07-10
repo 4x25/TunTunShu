@@ -67,20 +67,30 @@ async function fetchThroughPage<T>(
   path: string,
   params: PageParams,
   targetPageIndex: number,
+  ensureId?: string | null,
 ): Promise<PageResult<T>> {
   const pages: PageResult<T>[] = [];
   const lastWanted = Math.max(1, targetPageIndex);
-  for (let pageIndex = 1; pageIndex <= lastWanted; pageIndex += 1) {
+  let pageIndex = 1;
+  let hasMore = true;
+  let foundEnsured = !ensureId;
+  while (pageIndex <= lastWanted || (!foundEnsured && hasMore)) {
     const page = await apiPage<T>(path, {
       ...params,
       pageIndex,
       pageSize: PAGE_SIZE,
     });
     pages.push(page);
-    if (
-      page.items.length === 0 ||
-      page.pageIndex * page.pageSize >= page.totalCount
-    ) break;
+    if (ensureId) {
+      foundEnsured = page.items.some((item) =>
+        typeof item === "object" && item !== null && "id" in item &&
+        String((item as { id: unknown }).id) === ensureId
+      );
+    }
+    hasMore = page.items.length > 0 &&
+      page.pageIndex * page.pageSize < page.totalCount;
+    if (!hasMore) break;
+    pageIndex += 1;
   }
   const last = pages[pages.length - 1];
   return {
@@ -100,6 +110,7 @@ async function loadCachedPage<T>(
     key,
     path,
     params,
+    ensureId,
   }: {
     state: ListPage<T>;
     setState: PageSetter<T>;
@@ -108,6 +119,7 @@ async function loadCachedPage<T>(
     key: string;
     path: string;
     params: PageParams;
+    ensureId?: string | null;
   },
 ) {
   const append = mode === "append";
@@ -159,7 +171,7 @@ async function loadCachedPage<T>(
         pageIndex: targetPageIndex,
         pageSize: PAGE_SIZE,
       })
-      : await fetchThroughPage<T>(path, params, targetPageIndex);
+      : await fetchThroughPage<T>(path, params, targetPageIndex, ensureId);
     if (version !== req.current) return;
     setState((prev) => {
       const next = mergePage(prev, page, append);
@@ -260,6 +272,7 @@ export function useUpstreamPages(
       key: siteKey,
       path: "/sites",
       params: { siteQ: qSite, accountQ: qAcc, apiKeyQ: qKey, modelQ: qMod },
+      ensureId: sel.site,
     });
   }
 
@@ -278,6 +291,7 @@ export function useUpstreamPages(
         modelQ: qMod,
         siteId: sel.site,
       },
+      ensureId: sel.account,
     });
   }
 
@@ -297,6 +311,7 @@ export function useUpstreamPages(
         siteId: sel.site,
         accountId: sel.account,
       },
+      ensureId: sel.key,
     });
   }
 
@@ -322,16 +337,37 @@ export function useUpstreamPages(
 
   async function reloadScope(scope: RefreshScope) {
     const jobs: Promise<void>[] = [];
-    if (scope === "all" || scope === "site" || scope === "siteOnly") {
+    const accountPathSearch = Boolean(qAcc || qKey || qMod);
+    const keyPathSearch = Boolean(qKey || qMod);
+    const modelPathSearch = Boolean(qMod);
+    const refreshSites = ["all", "site", "siteOnly"].includes(scope) ||
+      (scope === "account" && accountPathSearch) ||
+      (scope === "key" && keyPathSearch) ||
+      (["um", "models"].includes(scope) && modelPathSearch);
+    const refreshAccounts = ["all", "site", "account"].includes(scope) ||
+      (scope === "key" && keyPathSearch) ||
+      (["um", "models"].includes(scope) && modelPathSearch);
+    const refreshKeys = ["all", "site", "account", "key"].includes(scope) ||
+      (["um", "models"].includes(scope) && modelPathSearch);
+    const refreshUms = [
+      "all",
+      "site",
+      "account",
+      "key",
+      "um",
+      "models",
+    ].includes(scope);
+
+    if (refreshSites) {
       jobs.push(loadSites("revalidate"));
     }
-    if (["all", "site", "account"].includes(scope)) {
+    if (refreshAccounts) {
       jobs.push(loadAccounts("revalidate"));
     }
-    if (["all", "site", "account", "key"].includes(scope)) {
+    if (refreshKeys) {
       jobs.push(loadKeys("revalidate"));
     }
-    if (["all", "site", "account", "key", "um", "models"].includes(scope)) {
+    if (refreshUms) {
       jobs.push(loadUms("revalidate"));
     }
     if (scope === "all" || scope === "models") jobs.push(loadModels());
