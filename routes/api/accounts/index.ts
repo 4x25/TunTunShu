@@ -1,5 +1,6 @@
 import { define } from "../../../utils.ts";
 import { requireAdmin } from "../../../lib/auth.ts";
+import { PageParamError, parsePageParams } from "../../../lib/pagination.ts";
 import { json } from "../../../lib/response.ts";
 import {
   createAccount,
@@ -12,7 +13,16 @@ export const handler = define.handlers({
   async GET(ctx) {
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
-    return json(await listAccounts());
+    try {
+      return json(
+        await listAccounts(parsePageParams(ctx.req, ["siteId"], "accountQ")),
+      );
+    } catch (error) {
+      if (error instanceof PageParamError) {
+        return json({ error: error.message }, 400);
+      }
+      throw error;
+    }
   },
   async POST(ctx) {
     const unauthorized = requireAdmin(ctx.req);

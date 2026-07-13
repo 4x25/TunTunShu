@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { apiGet } from "../components/admin_api.ts";
+import { apiGet, fetchAllPages } from "../components/admin_api.ts";
 
 interface ReqLog {
   id: string;
@@ -129,9 +129,13 @@ export default function LogsApp() {
       const [req, sys, sites, accounts, keys] = await Promise.all([
         apiGet<ReqLog[]>("/request-logs"),
         apiGet<SysLog[]>("/system-task-logs"),
-        apiGet<{ id: string; name: string }[]>("/sites"),
-        apiGet<{ id: string; name: string; site_id: string }[]>("/accounts"),
-        apiGet<{ id: string; name: string; account_id: string }[]>("/api-keys"),
+        fetchAllPages<{ id: string; name: string }>("/sites"),
+        fetchAllPages<{ id: string; name: string; site_id: string }>(
+          "/accounts",
+        ),
+        fetchAllPages<{ id: string; name: string; account_id: string }>(
+          "/api-keys",
+        ),
       ]);
       setReqLogs(req);
       setSysLogs(sys);

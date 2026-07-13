@@ -3,6 +3,7 @@ import {
   NewApiAdapter,
   type NewApiUserAuth,
 } from "../adapters/new_api_adapter.ts";
+import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
 import { isUniqueViolation } from "./site_service.ts";
@@ -266,11 +267,69 @@ export async function probeAccountUsername(
   });
 }
 
-export async function listAccounts() {
+export async function listAccounts(params: PageParams) {
   const sql = getSql();
-  return await sql`
-    select * from accounts order by id desc
+  const values: Array<number | string> = [];
+  const where: string[] = [];
+  const needsSites = Boolean(params.siteQ);
+  const needsApiKeys = Boolean(params.apiKeyQ || params.modelQ);
+  const needsModels = Boolean(params.modelQ);
+  const fromSql = `
+    from accounts
+    ${needsSites ? "join sites on sites.id = accounts.site_id" : ""}
+    ${needsApiKeys ? "join api_keys on api_keys.account_id = accounts.id" : ""}
+    ${
+    needsModels
+      ? "join upstream_models on upstream_models.api_key_id = api_keys.id"
+      : ""
+  }
+    ${
+    needsModels
+      ? "left join models on models.id = upstream_models.model_id"
+      : ""
+  }
   `;
+  if (params.siteId !== undefined) {
+    values.push(params.siteId);
+    where.push(`accounts.site_id = $${values.length}`);
+  }
+  if (params.siteQ) {
+    values.push(`%${params.siteQ}%`);
+    where.push(
+      `(sites.name ilike $${values.length} or sites.origin ilike $${values.length})`,
+    );
+  }
+  if (params.accountQ) {
+    values.push(`%${params.accountQ}%`);
+    where.push(
+      `(accounts.name ilike $${values.length} or accounts.user_id ilike $${values.length})`,
+    );
+  }
+  if (params.apiKeyQ) {
+    values.push(`%${params.apiKeyQ}%`);
+    where.push(
+      `(api_keys.name ilike $${values.length} or api_keys.key ilike $${values.length})`,
+    );
+  }
+  if (params.modelQ) {
+    values.push(`%${params.modelQ}%`);
+    where.push(
+      `(upstream_models.name ilike $${values.length} or models.name ilike $${values.length})`,
+    );
+  }
+  const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+  const countRows = await sql.unsafe<{ count: number }[]>(
+    `select count(distinct accounts.id)::int as count ${fromSql} ${whereSql}`,
+    values,
+  );
+  const pageValues = [...values, params.pageSize, params.offset];
+  const items = await sql.unsafe(
+    `select distinct accounts.* ${fromSql} ${whereSql}
+     order by accounts.id desc
+     limit $${values.length + 1} offset $${values.length + 2}`,
+    pageValues,
+  );
+  return pageResult(items, params, Number(countRows[0]?.count ?? 0));
 }
 
 export async function updateAccount(

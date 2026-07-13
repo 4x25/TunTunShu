@@ -1,5 +1,6 @@
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { getSql } from "../db/client.ts";
+import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 
 const adapter = new NewApiAdapter();
@@ -90,9 +91,67 @@ export async function createSite(input: {
   }
 }
 
-export async function listSites() {
+export async function listSites(params: PageParams) {
   const sql = getSql();
-  return await sql`select * from sites order by id desc`;
+  const values: Array<number | string> = [];
+  const where: string[] = [];
+  const needsAccounts = Boolean(
+    params.accountQ || params.apiKeyQ || params.modelQ,
+  );
+  const needsApiKeys = Boolean(params.apiKeyQ || params.modelQ);
+  const needsModels = Boolean(params.modelQ);
+  const fromSql = `
+    from sites
+    ${needsAccounts ? "join accounts on accounts.site_id = sites.id" : ""}
+    ${needsApiKeys ? "join api_keys on api_keys.account_id = accounts.id" : ""}
+    ${
+    needsModels
+      ? "join upstream_models on upstream_models.api_key_id = api_keys.id"
+      : ""
+  }
+    ${
+    needsModels
+      ? "left join models on models.id = upstream_models.model_id"
+      : ""
+  }
+  `;
+  if (params.siteQ) {
+    values.push(`%${params.siteQ}%`);
+    where.push(
+      `(sites.name ilike $${values.length} or sites.origin ilike $${values.length})`,
+    );
+  }
+  if (params.accountQ) {
+    values.push(`%${params.accountQ}%`);
+    where.push(
+      `(accounts.name ilike $${values.length} or accounts.user_id ilike $${values.length})`,
+    );
+  }
+  if (params.apiKeyQ) {
+    values.push(`%${params.apiKeyQ}%`);
+    where.push(
+      `(api_keys.name ilike $${values.length} or api_keys.key ilike $${values.length})`,
+    );
+  }
+  if (params.modelQ) {
+    values.push(`%${params.modelQ}%`);
+    where.push(
+      `(upstream_models.name ilike $${values.length} or models.name ilike $${values.length})`,
+    );
+  }
+  const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+  const countRows = await sql.unsafe<{ count: number }[]>(
+    `select count(distinct sites.id)::int as count ${fromSql} ${whereSql}`,
+    values,
+  );
+  const pageValues = [...values, params.pageSize, params.offset];
+  const items = await sql.unsafe(
+    `select distinct sites.* ${fromSql} ${whereSql}
+     order by sites.id desc
+     limit $${values.length + 1} offset $${values.length + 2}`,
+    pageValues,
+  );
+  return pageResult(items, params, Number(countRows[0]?.count ?? 0));
 }
 
 export async function updateSite(
