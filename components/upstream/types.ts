@@ -60,11 +60,14 @@ export interface TestResult {
   error?: string;
 }
 
-export interface TestView {
-  id: string;
-  name: string;
-  kind: TestKind;
-}
+export type TestRunState =
+  | { status: "loading" }
+  | { status: "done"; result: TestResult };
+
+export type TestRunStates = Record<
+  string,
+  Partial<Record<TestKind, TestRunState>>
+>;
 
 export interface ListPage<T> {
   items: T[];

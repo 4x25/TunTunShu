@@ -12,7 +12,6 @@ import { useDebouncedValue } from "../components/upstream/list_state.ts";
 import { NewModelModal } from "../components/upstream/NewModelModal.tsx";
 import { ResourceModal } from "../components/upstream/ResourceModal.tsx";
 import { SiteColumn } from "../components/upstream/SiteColumn.tsx";
-import { TestResultModal } from "../components/upstream/TestResultModal.tsx";
 import { UpstreamModelColumn } from "../components/upstream/UpstreamModelColumn.tsx";
 import { UpstreamToolbar } from "../components/upstream/UpstreamToolbar.tsx";
 import { useResourceDialogs } from "../components/upstream/use_resource_dialogs.ts";
@@ -26,7 +25,8 @@ import type {
   Site,
   TestKind,
   TestResult,
-  TestView,
+  TestRunState,
+  TestRunStates,
   UpstreamModel,
 } from "../components/upstream/types.ts";
 
@@ -72,8 +72,7 @@ export default function UpstreamApp() {
   const [openDd, setOpenDd] = useState<string | null>(null);
   const [ddFilter, setDdFilter] = useState("");
   const [openEp, setOpenEp] = useState<string | null>(null);
-  const [testView, setTestView] = useState<TestView | null>(null);
-  const [testOut, setTestOut] = useState<TestResult | "loading" | null>(null);
+  const [testStates, setTestStates] = useState<TestRunStates>({});
 
   const [flash, setFlash] = useState<Flash | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -142,7 +141,6 @@ export default function UpstreamApp() {
         setOpenEp(null);
         setModal(null);
         setNmFor(null);
-        setTestView(null);
       }
     };
     document.addEventListener("click", onClick);
@@ -426,10 +424,63 @@ export default function UpstreamApp() {
     );
   };
 
+  function setTestState(
+    modelId: string,
+    kind: TestKind,
+    state: TestRunState,
+  ) {
+    setTestStates((current) => ({
+      ...current,
+      [modelId]: { ...current[modelId], [kind]: state },
+    }));
+  }
+
+  function isTestResult(value: unknown): value is TestResult {
+    if (typeof value !== "object" || value === null) return false;
+    const result = value as Partial<TestResult>;
+    return typeof result.endpointType === "string" &&
+      (result.kind === "chat" || result.kind === "vision" ||
+        result.kind === "tool") &&
+      typeof result.prompt === "string" &&
+      typeof result.reply === "string" &&
+      Array.isArray(result.toolCalls) &&
+      typeof result.pass === "boolean" &&
+      typeof result.reason === "string" &&
+      typeof result.latencyMs === "number" &&
+      Number.isFinite(result.latencyMs) &&
+      (result.httpStatus === undefined ||
+        typeof result.httpStatus === "number") &&
+      (result.error === undefined || typeof result.error === "string");
+  }
+
+  function responseError(data: unknown, raw: string): string | undefined {
+    if (typeof data === "object" && data !== null) {
+      const body = data as { message?: unknown; error?: unknown };
+      const nested = typeof body.error === "object" && body.error !== null
+        ? (body.error as { message?: unknown }).message
+        : undefined;
+      const message = typeof body.error === "string"
+        ? body.error
+        : typeof nested === "string"
+        ? nested
+        : typeof body.message === "string"
+        ? body.message
+        : undefined;
+      if (message?.trim()) return message.trim().slice(0, 300);
+    }
+    const text = raw.trim();
+    return text ? text.slice(0, 300) : undefined;
+  }
+
   async function runTest(m: UpstreamModel, kind: TestKind) {
-    setTestView({ id: m.id, name: m.name, kind });
-    setTestOut("loading");
-    const fail = (reason: string, error: string): TestResult => ({
+    if (testStates[m.id]?.[kind]?.status === "loading") return;
+    setTestState(m.id, kind, { status: "loading" });
+    const startedAt = Date.now();
+    const fail = (
+      reason: string,
+      error?: string,
+      httpStatus?: number,
+    ): TestResult => ({
       endpointType: m.endpoint_type,
       kind,
       prompt: "",
@@ -437,7 +488,8 @@ export default function UpstreamApp() {
       toolCalls: [],
       pass: false,
       reason,
-      latencyMs: 0,
+      latencyMs: Date.now() - startedAt,
+      httpStatus,
       error,
     });
     try {
@@ -449,19 +501,29 @@ export default function UpstreamApp() {
         },
         body: JSON.stringify({ kind }),
       });
-      const data = await res.json().catch(() => null) as TestResult | null;
-      setTestOut(
-        res.ok && data ? data : fail("请求失败", `HTTP ${res.status}`),
+      const raw = await res.text();
+      let data: unknown = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        // 非 JSON 响应由下方统一合成为失败结果。
+      }
+      const result = res.ok && isTestResult(data) ? data : fail(
+        res.ok ? "响应格式错误" : "请求失败",
+        responseError(data, raw) ??
+          (res.ok ? "上游模型测试接口返回了无效响应" : undefined),
+        res.ok ? undefined : res.status,
       );
+      setTestState(m.id, kind, { status: "done", result });
     } catch (e) {
-      setTestOut(fail("请求失败", e instanceof Error ? e.message : "error"));
+      setTestState(m.id, kind, {
+        status: "done",
+        result: fail(
+          "请求失败",
+          e instanceof Error ? e.message : "error",
+        ),
+      });
     }
-  }
-
-  function rerunTest() {
-    if (!testView) return;
-    const m = ums.find((x) => x.id === testView.id);
-    if (m) void runTest(m, testView.kind);
   }
 
   function openNewModel(umId: string) {
@@ -548,6 +610,7 @@ export default function UpstreamApp() {
           openDd={openDd}
           openEp={openEp}
           busy={busy}
+          testStates={testStates}
           onKeywordChange={(value) => setU({ modelKeyword: value })}
           onLoadMore={() => void loadUms("append")}
           onToggle={toggleUm}
@@ -590,12 +653,6 @@ export default function UpstreamApp() {
         onClose={() => setNmFor(null)}
         onNameChange={setNmName}
         onSave={() => void saveNewModel()}
-      />
-      <TestResultModal
-        testView={testView}
-        testOut={testOut}
-        onClose={() => setTestView(null)}
-        onRunAgain={rerunTest}
       />
     </>
   );

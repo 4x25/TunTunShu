@@ -3,7 +3,26 @@ import { IconSearch } from "../icons.tsx";
 import { ENDPOINT_LABELS, ENDPOINT_OPTIONS, TEST_KINDS } from "./constants.ts";
 import { handleColumnScroll } from "./list_state.ts";
 import { ActBtn, MillerRow, RowActions, RowHead } from "./row_primitives.tsx";
-import type { ListPage, Model, TestKind, UpstreamModel } from "./types.ts";
+import type {
+  ListPage,
+  Model,
+  TestKind,
+  TestResult,
+  TestRunStates,
+  UpstreamModel,
+} from "./types.ts";
+
+function testSummary(result: TestResult): string {
+  const lines = [
+    `${result.pass ? "通过" : "未通过"} · ${result.latencyMs} ms`,
+    `原因：${result.reason}`,
+  ];
+  if (result.httpStatus !== undefined) {
+    lines.push(`HTTP：${result.httpStatus}`);
+  }
+  if (result.error) lines.push(`错误：${result.error}`);
+  return lines.join("\n");
+}
 
 export function UpstreamModelColumn(
   {
@@ -17,6 +36,7 @@ export function UpstreamModelColumn(
     openDd,
     openEp,
     busy,
+    testStates,
     onKeywordChange,
     onLoadMore,
     onToggle,
@@ -38,6 +58,7 @@ export function UpstreamModelColumn(
     openDd: string | null;
     openEp: string | null;
     busy: string | null;
+    testStates: TestRunStates;
     onKeywordChange: (value: string) => void;
     onLoadMore: () => void;
     onToggle: (model: UpstreamModel) => void;
@@ -202,15 +223,37 @@ export function UpstreamModelColumn(
                   </div>
                 </div>
                 <RowActions>
-                  {TEST_KINDS.map((t) => (
-                    <ActBtn
-                      key={t.kind}
-                      disabled={busy === "ep" + m.id}
-                      onClick={() => onRunTest(m, t.kind)}
-                    >
-                      {t.label}
-                    </ActBtn>
-                  ))}
+                  {TEST_KINDS.map((t) => {
+                    const state = testStates[m.id]?.[t.kind];
+                    const result = state?.status === "done"
+                      ? state.result
+                      : null;
+                    return (
+                      <ActBtn
+                        key={t.kind}
+                        disabled={busy === "ep" + m.id ||
+                          state?.status === "loading"}
+                        title={result ? testSummary(result) : undefined}
+                        onClick={() => onRunTest(m, t.kind)}
+                      >
+                        {t.label}
+                        {state?.status === "loading"
+                          ? <span class="btn-spinner" aria-hidden="true"></span>
+                          : result
+                          ? (
+                            <span
+                              class={`test-status-icon ${
+                                result.pass ? "ok" : "bad"
+                              }`}
+                              aria-hidden="true"
+                            >
+                              {result.pass ? "✓" : "✕"}
+                            </span>
+                          )
+                          : null}
+                      </ActBtn>
+                    );
+                  })}
                 </RowActions>
               </MillerRow>
             );

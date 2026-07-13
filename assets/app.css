@@ -1898,36 +1898,21 @@ button:focus-visible,
   flex: none;
   display: block;
 }
-.tr-endpoint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.test-status-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
 }
-/* 测试结果弹窗:键值两列布局 */
-.test-result {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.test-status-icon.ok {
+  color: var(--ok);
 }
-.tr-row {
-  display: grid;
-  grid-template-columns: 64px 1fr;
-  gap: 10px;
-  align-items: start;
-}
-.tr-k {
-  color: var(--muted);
-  font-size: 12px;
-  padding-top: 2px;
-}
-.tr-v {
-  font-size: 13px;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-.tr-v.mono {
-  font-family: var(--font-mono);
-  font-size: 12px;
+.test-status-icon.bad {
+  color: var(--bad);
 }
 .mrow .bal {
   font-weight: 700;
