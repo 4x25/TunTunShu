@@ -182,14 +182,43 @@ export function buildUserScript(
     }
   }
 
-  function expectTtsList(r, what) {
+  function expectTtsPage(r, what) {
     if (r.status === 401) {
       throw new Error("鉴权失败,请从囤囤鼠后台「快捷录入」重新安装脚本");
     }
-    if (r.status < 200 || r.status >= 300 || !Array.isArray(r.json)) {
+    var page = r.json;
+    if (r.status < 200 || r.status >= 300 || !page ||
+      !Array.isArray(page.items) || !Number.isInteger(Number(page.pageSize)) ||
+      Number(page.pageSize) < 1 || !Number.isInteger(Number(page.pageIndex)) ||
+      Number(page.pageIndex) < 1 || !Number.isFinite(Number(page.totalCount)) ||
+      Number(page.totalCount) < 0) {
       throw new Error(responseMessage(r.json, what + "失败(" + r.status + ")"));
     }
-    return r.json;
+    return {
+      items: page.items,
+      pageSize: Number(page.pageSize),
+      pageIndex: Number(page.pageIndex),
+      totalCount: Number(page.totalCount),
+    };
+  }
+
+  // 后台列表 API 是分页接口。搜索词先缩小候选集,随后逐页精确匹配,避免目标记录
+  // 不在第一页时误判为“未录入”并绕过覆盖确认。
+  function findTtsItem(path, params, what, predicate, pageIndex) {
+    var search = new URLSearchParams();
+    Object.keys(params).forEach(function (key) {
+      search.set(key, String(params[key]));
+    });
+    search.set("pageSize", "50");
+    search.set("pageIndex", String(pageIndex));
+    return tts("GET", path + "?" + search.toString()).then(function (r) {
+      var page = expectTtsPage(r, what);
+      var found = page.items.find(predicate);
+      if (found) return found;
+      if (page.items.length === 0 ||
+        page.pageIndex * page.pageSize >= page.totalCount) return null;
+      return findTtsItem(path, params, what, predicate, pageIndex + 1);
+    });
   }
 
   // 已录入判定:站点(origin) 与账号(site_id+user_id) 都存在则 recorded。
@@ -201,19 +230,26 @@ export function buildUserScript(
       return Promise.resolve(false);
     }
     var origin = normOrigin(location.origin);
-    return tts("GET", "/api/sites").then(function (r) {
-      var sites = expectTtsList(r, "读取站点");
-      var site = sites.find(function (s) {
-        return normOrigin(s.origin) === origin;
-      });
+    return findTtsItem(
+      "/api/sites",
+      { siteQ: origin },
+      "读取站点",
+      function (s) {
+        return s && s.id != null && normOrigin(s.origin) === origin;
+      },
+      1,
+    ).then(function (site) {
       if (!site) return false;
-      return tts("GET", "/api/accounts").then(function (r2) {
-        var accts = expectTtsList(r2, "读取账号");
-        return !!accts.find(function (a) {
+      return findTtsItem(
+        "/api/accounts",
+        { siteId: site.id, accountQ: auth.userId },
+        "读取账号",
+        function (a) {
           return String(a.site_id) === String(site.id) &&
             String(a.user_id) === String(auth.userId);
-        });
-      });
+        },
+        1,
+      ).then(function (account) { return !!account; });
     }).then(function (recorded) {
       state.recorded = !!recorded;
       paint();

@@ -19,6 +19,7 @@ interface BrowserCall {
   path: string;
   headers: Record<string, string>;
   body: unknown;
+  query?: Record<string, string>;
 }
 
 interface GmRequest {
@@ -37,6 +38,7 @@ interface ScenarioOptions {
   legacyUserId?: number;
   modernUserId?: number;
   existing?: boolean;
+  existingPage?: number;
   confirmResult?: boolean;
   tokenTotal?: number;
 }
@@ -218,19 +220,43 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
       path: url.pathname,
       headers: request.headers ?? {},
       body,
+      query: Object.fromEntries(url.searchParams.entries()),
     };
     ttsCalls.push(call);
 
     let responseBody: unknown;
     if (call.method === "GET" && call.path === "/api/sites") {
-      responseBody = options.existing ? [{ id: 11, origin }] : [];
+      const pageIndex = Number(url.searchParams.get("pageIndex") ?? "1");
+      const pageSize = Number(url.searchParams.get("pageSize") ?? "50");
+      const targetPage = options.existingPage ?? 1;
+      const totalCount = options.existing ? (targetPage - 1) * pageSize + 1 : 0;
+      const items = options.existing && pageIndex === targetPage
+        ? [{ id: 11, origin }]
+        : options.existing && pageIndex < targetPage
+        ? Array.from({ length: pageSize }, (_, index) => ({
+          id: 1_000 + index,
+          origin: `${origin}.candidate-${index}`,
+        }))
+        : [];
+      responseBody = { items, pageSize, pageIndex, totalCount };
     } else if (call.method === "GET" && call.path === "/api/accounts") {
       const userId = options.localUser && (options.legacyStatus ?? 200) === 200
         ? legacyUserId
         : modernUserId;
-      responseBody = options.existing
+      const pageIndex = Number(url.searchParams.get("pageIndex") ?? "1");
+      const pageSize = Number(url.searchParams.get("pageSize") ?? "50");
+      const targetPage = options.existingPage ?? 1;
+      const totalCount = options.existing ? (targetPage - 1) * pageSize + 1 : 0;
+      const items = options.existing && pageIndex === targetPage
         ? [{ id: 22, site_id: 11, user_id: String(userId) }]
+        : options.existing && pageIndex < targetPage
+        ? Array.from({ length: pageSize }, (_, index) => ({
+          id: 2_000 + index,
+          site_id: 11,
+          user_id: String(userId) + String(index + 1),
+        }))
         : [];
+      responseBody = { items, pageSize, pageIndex, totalCount };
     } else if (call.method === "POST" && call.path === "/api/sites") {
       responseBody = { success: true, id: 11, updated: false };
     } else if (call.method === "POST" && call.path === "/api/accounts") {
@@ -447,6 +473,46 @@ Deno.test("userscript 已录入取消后不生成 PAT 或执行写操作", async
   assert(
     !harness.ttsCalls.some((call) => call.method === "POST"),
     "cancelled flow must not write to TunTunShu",
+  );
+});
+
+Deno.test("userscript 精确过滤并逐页查找已录入账号", async () => {
+  const harness = await createHarness({
+    localUser: JSON.stringify({ id: 7, username: "legacy" }),
+    existing: true,
+    existingPage: 2,
+    confirmResult: false,
+  });
+  await harness.click();
+
+  assert(
+    harness.ttsCalls.some((call) =>
+      call.path === "/api/sites" && call.query?.pageIndex === "2"
+    ),
+    "site lookup must continue to the second page",
+  );
+  assert(
+    harness.ttsCalls.some((call) =>
+      call.path === "/api/accounts" && call.query?.pageIndex === "2"
+    ),
+    "account lookup must continue to the second page",
+  );
+  assert(
+    harness.ttsCalls.filter((call) => call.path === "/api/sites").every(
+      (call) => call.query?.siteQ === "https://new-api.example",
+    ),
+    "site lookup must use the exact origin as its search term",
+  );
+  assert(
+    harness.ttsCalls.filter((call) => call.path === "/api/accounts").every(
+      (call) => call.query?.siteId === "11" && call.query?.accountQ === "7",
+    ),
+    "account lookup must filter by site and user id",
+  );
+  assertEquals(harness.getConfirmCount(), 1, "second-page match must ask once");
+  assert(
+    !harness.ttsCalls.some((call) => call.method === "POST"),
+    "cancelled second-page match must not perform writes",
   );
 });
 

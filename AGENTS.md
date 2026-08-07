@@ -359,8 +359,9 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   session; 本地用户缺失/无效或旧验证返回 401 时,才调
   `POST /api/user/auth/refresh` 获取新版 Dashboard Bearer token。短期 Dashboard
   token 仅在脚本内存中用于同源 new-api 请求,最终保存到囤囤鼠的是
-  `/api/user/token` 新生成的长期 access token。保存账号前 `ensureApiKeys`
-  确保该用户 ≥1 个 APIKey:为 0 时按可用分组各建一个
+  `/api/user/token` 新生成的长期 access token。已录入判定会用 origin/userId
+  搜索分页后台 API 并逐页精确匹配,避免记录不在第一页时绕过覆盖确认。保存账号前
+  `ensureApiKeys` 确保该用户 ≥1 个 APIKey:为 0 时按可用分组各建一个
   `unlimited_quota`、`expired_time:
   -1`(**必须显式传 -1**,零值 0 会被 new-api
   当作已过期)的 `DEFAULT` 密钥;全程 best-effort,且只回传
@@ -380,7 +381,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `lib/pagination_test.ts`:分页参数与响应形状。
 - `lib/sse_test.ts`:SSE usage 嗅探、跨分片重组、无 usage 时返回 null。
 - `lib/userscript_test.ts`:用轻量浏览器 mock 执行生成脚本,覆盖新旧 new-api
-  鉴权顺序、401 fallback、Bearer 隔离、录入与取消覆盖。
+  鉴权顺序、401 fallback、Bearer 隔离、分页已录入判定、录入与取消覆盖。
 
 运行 `deno test -A`。
 
