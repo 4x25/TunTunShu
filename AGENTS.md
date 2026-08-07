@@ -39,7 +39,7 @@ deno task dev      # vite(HMR 开发服务器)
 deno task build    # vite build → _fresh/
 deno task start    # deno serve -A _fresh/server.js(生产)
 deno task update   # deno run -A -r jsr:@fresh/update .
-deno test lib/sse_test.ts   # 唯一的测试文件
+deno test -A       # 全部自动化测试
 ```
 
 `deno fmt`(不带 `--check`)自动修复格式。
@@ -354,7 +354,13 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   一次 best-effort `sync-quota` 刷额度——后端 `checkinAccount`(及
   cron/批量任务)只 签到不刷额度,因该函数被批量共用。
 - **「快捷录入」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装油猴脚本
-  (`lib/userscript.ts`)在 new-api 站点一键录入站点+账号。保存账号前
+  (`lib/userscript.ts`)在 new-api 站点一键录入站点+账号。登录态解析遵循
+  **旧版优先、新版兜底**:先读取 `localStorage.user` 并以 `/api/user/self` 验证旧
+  session; 本地用户缺失/无效或旧验证返回 401 时,才调
+  `POST /api/user/auth/refresh` 获取新版 Dashboard Bearer token。短期 Dashboard
+  token 仅在脚本内存中用于同源 new-api 请求,最终保存到囤囤鼠的是
+  `/api/user/token` 新生成的长期 access token。已录入判定会用 origin/userId
+  搜索分页后台 API 并逐页精确匹配,避免记录不在第一页时绕过覆盖确认。保存账号前
   `ensureApiKeys` 确保该用户 ≥1 个 APIKey:为 0 时按可用分组各建一个
   `unlimited_quota`、`expired_time:
   -1`(**必须显式传 -1**,零值 0 会被 new-api
@@ -370,10 +376,16 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 
 ## Tests
 
-仅 `lib/sse_test.ts`(纯 `Deno.test`,手写 assertEquals,无 std/assert 依赖)——覆盖
-SSE usage 嗅探、 跨分片重组、无 usage 时返回
-null。`deno test lib/sse_test.ts`。无更广的测试套件。上游模型测试是运行时功能,
-不是自动化测试。
+测试均为纯 `Deno.test`,无 std/assert 依赖:
+
+- `lib/pagination_test.ts`:分页参数与响应形状。
+- `lib/sse_test.ts`:SSE usage 嗅探、跨分片重组、无 usage 时返回 null。
+- `lib/userscript_test.ts`:用轻量浏览器 mock 执行生成脚本,覆盖新旧 new-api
+  鉴权顺序、401 fallback、Bearer 隔离、分页已录入判定、录入与取消覆盖。
+
+运行 `deno test -A`。
+
+上游模型测试是运行时功能,不是自动化测试。
 
 ## Dead config(尚存)
 
@@ -392,5 +404,5 @@ Fresh
   node_modules 解析这些裸导入。新增 AI SDK 依赖时同步这份清单。
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。
-- 版本号:UI 页脚/登录页显示 `v1.4.2`,油猴脚本独立 `@version 1.3.1`;`deno.json`
+- 版本号:UI 页脚/登录页显示 `v1.4.2`,油猴脚本独立 `@version 1.3.2`;`deno.json`
   无 version 字段。
