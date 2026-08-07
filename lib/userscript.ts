@@ -12,8 +12,10 @@
  * → 调囤囤鼠签到接口签到一次(顺带验证令牌可用);
  * 已录入态点击需 confirm 确认后重新保存(后端 POST 已是 upsert,新建/重存同一链路)。
  *
- * new-api 的 UserAuth 中间件要求每个鉴权请求都带 New-Api-User 头(= 登录用户 id),
- * 故 /api/user/token 必须带该头,否则报「未提供 New-Api-User」。
+ * 登录态兼容两代 new-api:
+ * - 旧版优先读取 localStorage.user,并用 session cookie + New-Api-User 验证;
+ * - 本地用户缺失/无效或旧 session 已失效时,才通过 /api/user/auth/refresh 获取新版
+ *   Dashboard Bearer token。该短期 token 仅用于同源请求,不会保存或发给囤囤鼠。
  */
 export function buildUserScript(
   opts: { baseUrl: string; authKey: string },
@@ -33,7 +35,7 @@ export function buildUserScript(
   return `// ==UserScript==
 // @name         囤囤鼠 · 快捷录入
 // @namespace    tuntunshu
-// @version      1.3.1
+// @version      1.3.2
 // @description  在 new-api 站点一键录入站点与账号到囤囤鼠
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -86,9 +88,31 @@ export function buildUserScript(
 
   function normOrigin(o) { return String(o || "").replace(/[/]+$/, ""); }
 
-  function getUser() {
-    try { return JSON.parse(localStorage.getItem("user") || "null"); }
-    catch (e) { return null; }
+  // 旧版 new-api 会把完整用户对象放在 localStorage.user。仅接受正整数 id,
+  // 避免损坏/无关数据阻止新版鉴权兜底。
+  function getLegacyUser() {
+    try {
+      var user = JSON.parse(localStorage.getItem("user") || "null");
+      var id = user && Number(user.id);
+      return Number.isInteger(id) && id > 0 ? user : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function taggedError(message, kind) {
+    var error = new Error(message);
+    error.kind = kind;
+    return error;
+  }
+
+  function responseMessage(json, fallback) {
+    var message = json && (json.message || json.error);
+    return message ? String(message) : fallback;
   }
 
   // new-api 甄别:/api/status 命中 >=2 个特征字段才认。
@@ -158,76 +182,205 @@ export function buildUserScript(
     }
   }
 
+  function expectTtsList(r, what) {
+    if (r.status === 401) {
+      throw new Error("鉴权失败,请从囤囤鼠后台「快捷录入」重新安装脚本");
+    }
+    if (r.status < 200 || r.status >= 300 || !Array.isArray(r.json)) {
+      throw new Error(responseMessage(r.json, what + "失败(" + r.status + ")"));
+    }
+    return r.json;
+  }
+
   // 已录入判定:站点(origin) 与账号(site_id+user_id) 都存在则 recorded。
-  function refreshRecorded(user) {
-    if (!user || user.id == null) { state.recorded = false; paint(); return; }
+  // 返回 Promise<boolean>,点击流程会等待结果后再决定是否弹出覆盖确认。
+  function refreshRecorded(auth) {
+    if (!auth || !auth.userId) {
+      state.recorded = false;
+      paint();
+      return Promise.resolve(false);
+    }
     var origin = normOrigin(location.origin);
-    tts("GET", "/api/sites").then(function (r) {
-      var sites = Array.isArray(r.json) ? r.json : [];
+    return tts("GET", "/api/sites").then(function (r) {
+      var sites = expectTtsList(r, "读取站点");
       var site = sites.find(function (s) {
         return normOrigin(s.origin) === origin;
       });
-      if (!site) return null;
+      if (!site) return false;
       return tts("GET", "/api/accounts").then(function (r2) {
-        var accts = Array.isArray(r2.json) ? r2.json : [];
-        return accts.find(function (a) {
+        var accts = expectTtsList(r2, "读取账号");
+        return !!accts.find(function (a) {
           return String(a.site_id) === String(site.id) &&
-            String(a.user_id) === String(user.id);
-        }) || null;
+            String(a.user_id) === String(auth.userId);
+        });
       });
-    }).then(function (acct) {
-      state.recorded = !!acct;
+    }).then(function (recorded) {
+      state.recorded = !!recorded;
       paint();
-    }).catch(function () {});
+      return state.recorded;
+    });
   }
 
-  // 同源取 access token(每次生成新 token,旧的失效)。
-  // new-api 要求带 New-Api-User 头(= 登录用户 id),否则报「未提供 New-Api-User」。
-  function genAccessToken(userId) {
-    return fetch("/api/user/token", {
-      credentials: "include",
-      headers: { "New-Api-User": String(userId) },
-    })
-      .then(function (r) {
-        return r.json().catch(function () { return null; });
-      })
-      .then(function (j) {
-        if (!j || !j.data) {
-          throw new Error(
-            (j && j.message) || "获取 accessToken 失败,请确认已登录 new-api",
-          );
-        }
-        return j.data;
-      });
-  }
-
-  // 同源调 new-api 用户接口:带 session cookie 与 New-Api-User 头,返回解析后 JSON(失败返回 null)。
-  // 与 genAccessToken 一致——脚本运行在 new-api 页面上下文,token 接口为同源,用 fetch 而非跨域。
-  function napi(method, path, userId, body) {
+  // 同源调 new-api。旧模式只带 session cookie + New-Api-User;新版模式额外带
+  // 短期 Dashboard Bearer token。返回 HTTP 状态与解析后的 JSON,供鉴权分支判断。
+  function napiRequest(method, path, auth, body) {
+    var headers = {
+      "Cache-Control": "no-store",
+      "New-Api-User": String(auth.userId),
+    };
+    if (auth.dashboardToken) {
+      headers.Authorization = "Bearer " + auth.dashboardToken;
+    }
+    if (body) headers["Content-Type"] = "application/json";
     return fetch(path, {
       method: method,
       credentials: "include",
-      headers: {
-        "New-Api-User": String(userId),
-        "Content-Type": "application/json",
-      },
+      headers: headers,
       body: body ? JSON.stringify(body) : undefined,
     }).then(function (r) {
-      return r.json().catch(function () { return null; });
+      return r.json().catch(function () { return null; }).then(function (json) {
+        return { status: r.status, json: json };
+      });
+    }, function (e) {
+      throw new Error("连接 new-api 失败:" + ((e && e.message) || "网络错误"));
+    });
+  }
+
+  function napi(method, path, auth, body) {
+    return napiRequest(method, path, auth, body).then(function (r) {
+      return r.json;
+    });
+  }
+
+  // 验证旧 localStorage 用户确实仍有有效 session。最新版不接受这组凭据时返回 401,
+  // 此时才允许切换到 refresh 鉴权;普通服务错误不误触发模式切换。
+  function validateLegacyAuth(user) {
+    var auth = {
+      mode: "legacy",
+      userId: String(user.id),
+      user: user,
+      dashboardToken: null,
+      accessExpiresAt: null,
+    };
+    return napiRequest("GET", "/api/user/self", auth).then(function (r) {
+      if (r.status === 401) {
+        throw taggedError("旧版登录状态已失效", "legacy_unauthorized");
+      }
+      if (r.status < 200 || r.status >= 300) {
+        throw new Error(responseMessage(
+          r.json,
+          "验证旧版登录状态失败(" + r.status + ")",
+        ));
+      }
+      var current = r.json && r.json.success === true && r.json.data;
+      if (!current || current.id == null) {
+        throw new Error(responseMessage(r.json, "验证旧版登录状态失败"));
+      }
+      if (String(current.id) !== String(user.id)) {
+        throw taggedError("旧版登录用户已变化", "legacy_unauthorized");
+      }
+      auth.user = current;
+      return auth;
+    });
+  }
+
+  var refreshRaceDelays = [80, 200, 500];
+
+  function refreshModernAttempt(attempt) {
+    return fetch("/api/user/auth/refresh", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Cache-Control": "no-store" },
+    }).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (json) {
+        return { status: r.status, json: json };
+      });
+    }, function (e) {
+      throw new Error("连接 new-api 失败:" + ((e && e.message) || "网络错误"));
+    }).then(function (r) {
+      var code = r.json && r.json.code;
+      if (r.status === 409 && code === "AUTH_REFRESH_RACE" &&
+        attempt < refreshRaceDelays.length) {
+        return wait(refreshRaceDelays[attempt]).then(function () {
+          return refreshModernAttempt(attempt + 1);
+        });
+      }
+      if (r.status === 401 || r.status === 404 || r.status === 405) {
+        throw taggedError("请先登录 new-api", "not_logged_in");
+      }
+      if (r.status === 429) {
+        throw new Error("new-api 登录校验请求过于频繁,请稍后重试");
+      }
+      if (r.status < 200 || r.status >= 300) {
+        throw new Error(responseMessage(
+          r.json,
+          "验证新版登录状态失败(" + r.status + ")",
+        ));
+      }
+      var data = r.json && r.json.success === true && r.json.data;
+      var user = data && data.user;
+      var expiresAt = data && Number(data.access_expires_at);
+      if (!user || !Number.isInteger(Number(user.id)) || Number(user.id) <= 0 ||
+        !data.access_token || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+        throw new Error("new-api 返回了无效的登录状态");
+      }
+      return {
+        mode: "modern",
+        userId: String(user.id),
+        user: user,
+        dashboardToken: String(data.access_token),
+        accessExpiresAt: expiresAt,
+      };
+    });
+  }
+
+  function refreshModernAuth() {
+    var run = function () { return refreshModernAttempt(0); };
+    if (typeof navigator !== "undefined" && navigator.locks &&
+      typeof navigator.locks.request === "function") {
+      return navigator.locks.request("new-api:auth-refresh", run);
+    }
+    return run();
+  }
+
+  // 鉴权顺序是有意的:有效的旧版 localStorage + session 永远优先;只有取不到或
+  // 明确验证失效时才访问新版 refresh 端点。
+  function resolveAuth() {
+    var legacyUser = getLegacyUser();
+    if (!legacyUser) return refreshModernAuth();
+    return validateLegacyAuth(legacyUser).catch(function (e) {
+      if (e && e.kind === "legacy_unauthorized") return refreshModernAuth();
+      throw e;
+    });
+  }
+
+  // 生成长期 PAT(每次生成都会令旧 PAT 失效)。新版 Dashboard token 只用于鉴权
+  // 本次同源请求,真正交给囤囤鼠保存的是响应 data 中的 PAT。
+  function genAccessToken(auth) {
+    return napiRequest("GET", "/api/user/token", auth).then(function (r) {
+      if (r.status === 401) {
+        throw taggedError("登录状态已失效,请重试", "not_logged_in");
+      }
+      var token = r.json && r.json.success === true && r.json.data;
+      if (r.status < 200 || r.status >= 300 ||
+        typeof token !== "string" || !token.trim()) {
+        throw new Error(responseMessage(r.json, "获取 accessToken 失败"));
+      }
+      return token.trim();
     });
   }
 
   // 确保该用户在 new-api 下至少有 1 个 APIKey;没有则按可用分组各建一个无限额度 DEFAULT 密钥。
   // 尽力而为:任何环节失败只 console.warn,不抛错(不阻断账号保存)。
-  function ensureApiKeys(userId) {
-    return napi("GET", "/api/token/?p=1&page_size=10", userId).then(function (j) {
+  function ensureApiKeys(auth) {
+    return napi("GET", "/api/token/?p=1&page_size=10", auth).then(function (j) {
       var data = j && j.data;
       var total = data && typeof data.total === "number"
         ? data.total
         : (data && Array.isArray(data.items) ? data.items.length : 0);
       if (total >= 1) return; // 已有现成密钥 → 走正常逻辑,不创建
       // 无密钥:取可用分组,逐个创建。
-      return napi("GET", "/api/user/self/groups", userId).then(function (g) {
+      return napi("GET", "/api/user/self/groups", auth).then(function (g) {
         var groups = (g && g.data && typeof g.data === "object")
           ? Object.keys(g.data)
           : [];
@@ -235,7 +388,7 @@ export function buildUserScript(
         // 串行创建,便于逐个容错。
         return groups.reduce(function (p, name) {
           return p.then(function () {
-            return napi("POST", "/api/token/", userId, {
+            return napi("POST", "/api/token/", auth, {
               name: ("DEFAULT - " + (name || "default")).slice(0, 50), // new-api 名称上限 50
               unlimited_quota: true, // 无限额度
               remain_quota: 0, // 无限时忽略
@@ -295,35 +448,44 @@ export function buildUserScript(
 
   function onClick() {
     if (state.busy) return;
-    var user = getUser();
-    if (!user || user.id == null) { toast("请先登录 new-api", false); return; }
-    if (state.recorded) {
-      if (!confirm("该账号已录入。重新保存会重新生成 new-api access token" +
-        "(旧 token 立即失效)并覆盖已有记录,确定继续?")) return;
-    }
-    var wasRecorded = state.recorded;
+    var auth = null;
+    var wasRecorded = false;
     var origin = normOrigin(location.origin);
     var siteId = null;
     var accessToken = null;
     state.busy = true;
     btn.disabled = true;
     btn.style.background = "#0a83c4";
-    // 1.保存站点 → 2.取 token → 3.确保 APIKey → 4.保存账号(均 upsert) → 5.签到一次。
-    step("保存站点…", 10);
-    tts("POST", "/api/sites", { origin: origin }).then(function (r) {
+    // 1.解析并验证当前用户 → 2.确认覆盖 → 3.保存站点 → 4.取 PAT →
+    // 5.确保 APIKey → 6.保存账号(均 upsert) → 7.签到一次。
+    step("验证登录…", 5);
+    resolveAuth().then(function (resolved) {
+      auth = resolved;
+      return refreshRecorded(auth);
+    }).then(function (recorded) {
+      wasRecorded = recorded;
+      if (recorded && !confirm(
+        "该账号已录入。重新保存会重新生成 new-api access token" +
+          "(旧 token 立即失效)并覆盖已有记录,确定继续?",
+      )) {
+        throw taggedError("", "cancelled");
+      }
+      step("保存站点…", 15);
+      return tts("POST", "/api/sites", { origin: origin });
+    }).then(function (r) {
       siteId = checkStatus(r, "保存站点").id;
-      step("获取令牌…", 35);
-      return genAccessToken(user.id);
+      step("获取令牌…", 40);
+      return genAccessToken(auth);
     }).then(function (token) {
       accessToken = token;
       // 保存账号前确保至少 1 个 APIKey(尽力而为,内部已吞错,失败不阻断保存)。
-      step("检查密钥…", 60);
-      return ensureApiKeys(user.id);
+      step("检查密钥…", 62);
+      return ensureApiKeys(auth);
     }).then(function () {
-      step("保存账号…", 78);
+      step("保存账号…", 80);
       return tts("POST", "/api/accounts", {
         siteId: Number(siteId),
-        userId: String(user.id),
+        userId: String(auth.userId),
         accessToken: accessToken,
       });
     }).then(function (r) {
@@ -340,6 +502,7 @@ export function buildUserScript(
     }).catch(function (e) {
       state.busy = false;
       paint();
+      if (e && e.kind === "cancelled") return;
       toast((e && e.message) ? e.message : "录入失败", false);
     });
   }
@@ -348,7 +511,12 @@ export function buildUserScript(
     detectNewApi().then(function (ok) {
       if (!ok || !document.body) return;
       render();
-      refreshRecorded(getUser());
+      resolveAuth().then(function (auth) {
+        return refreshRecorded(auth);
+      }).catch(function () {
+        state.recorded = false;
+        paint();
+      });
     });
   }
 
