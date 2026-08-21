@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { apiSend, getToken } from "../components/admin_api.ts";
+import { copyText } from "../components/clipboard.ts";
 import { useUrlState } from "../components/use_url_state.ts";
 import { AccountColumn } from "../components/upstream/AccountColumn.tsx";
 import { ApiKeyColumn } from "../components/upstream/ApiKeyColumn.tsx";
@@ -77,6 +78,7 @@ export default function UpstreamApp() {
 
   const [flash, setFlash] = useState<Flash | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const sites = sitePage.items;
   const accounts = accountPage.items;
@@ -327,6 +329,21 @@ export default function UpstreamApp() {
       "key",
     );
 
+  // 复制不改数据，故不走 act()（无需刷新列表）：成功后按钮短暂显示对勾
+  async function copyKey(k: ApiKey) {
+    try {
+      await copyText(k.key);
+      setCopiedKey(k.id);
+      setTimeout(
+        () => setCopiedKey((cur) => cur === k.id ? null : cur),
+        1500,
+      );
+      showFlash(`Key「${k.name}」的密钥已复制到剪贴板`, true);
+    } catch (e) {
+      showFlash(e instanceof Error ? e.message : "复制失败", false);
+    }
+  }
+
   function selectedAccountSiteId() {
     if (!sel.account) return null;
     return accounts.find((account) => account.id === sel.account)?.site_id ??
@@ -529,11 +546,13 @@ export default function UpstreamApp() {
           selectedId={sel.key}
           selectedAccountId={sel.account}
           busy={busy}
+          copiedId={copiedKey}
           onKeywordChange={(value) => setU({ keyKeyword: value })}
           onLoadMore={() => void loadKeys("append")}
           onCreate={() => openCreate("apikey")}
           onPick={pickKey}
           onToggle={toggleKey}
+          onCopyKey={(k) => void copyKey(k)}
           onSyncModels={syncModels}
           onDelete={delKey}
         />

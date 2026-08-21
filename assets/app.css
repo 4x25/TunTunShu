@@ -1825,6 +1825,37 @@ button:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 密钥密文 + 紧跟其右的复制按钮（APIKey 列）*/
+.mrow .l2 .keyline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mrow .l2 .keytext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copy-btn {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: transparent;
+}
+.copy-btn:hover {
+  color: var(--fg);
+  background: var(--fg-soft);
+}
+.copy-btn svg {
+  width: 13px;
+  height: 13px;
+}
 .mrow .l3 {
   display: flex;
   align-items: center;

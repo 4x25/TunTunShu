@@ -1,4 +1,5 @@
 import type { ComponentChildren, JSX } from "preact";
+import { IconCheck, IconCopy } from "../icons.tsx";
 import { STATUS_MAP } from "./constants.ts";
 
 export function Pill({ status }: { status: string }) {
@@ -107,6 +108,31 @@ export function ActBtn(
       }}
     >
       {children}
+    </button>
+  );
+}
+
+/* 行内小图标按钮：复制文本到剪贴板，复制成功后短暂显示对勾 */
+export function CopyBtn(
+  { title, copied, onClick }: {
+    title: string;
+    copied?: boolean;
+    onClick: () => void;
+  },
+) {
+  const label = copied ? "已复制" : title;
+  return (
+    <button
+      type="button"
+      class="copy-btn"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+    >
+      {copied ? <IconCheck /> : <IconCopy />}
     </button>
   );
 }

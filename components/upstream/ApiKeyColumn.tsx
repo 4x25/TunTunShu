@@ -3,6 +3,7 @@ import { maskKey } from "./constants.ts";
 import { handleColumnScroll } from "./list_state.ts";
 import {
   ActBtn,
+  CopyBtn,
   MillerRow,
   RowActions,
   RowHead,
@@ -18,11 +19,13 @@ export function ApiKeyColumn(
     selectedId,
     selectedAccountId,
     busy,
+    copiedId,
     onKeywordChange,
     onLoadMore,
     onCreate,
     onPick,
     onToggle,
+    onCopyKey,
     onSyncModels,
     onDelete,
   }: {
@@ -32,11 +35,13 @@ export function ApiKeyColumn(
     selectedId: string | null;
     selectedAccountId: string | null;
     busy: string | null;
+    copiedId: string | null;
     onKeywordChange: (value: string) => void;
     onLoadMore: () => void;
     onCreate: () => void;
     onPick: (id: string) => void;
     onToggle: (key: ApiKey) => void;
+    onCopyKey: (key: ApiKey) => void;
     onSyncModels: (key: ApiKey) => void;
     onDelete: (key: ApiKey) => void;
   },
@@ -89,7 +94,16 @@ export function ApiKeyColumn(
                 on={k.enabled}
                 onToggle={() => onToggle(k)}
               />
-              <RowSub>{maskKey(k.key)}</RowSub>
+              <RowSub>
+                <span class="keyline">
+                  <span class="keytext">{maskKey(k.key)}</span>
+                  <CopyBtn
+                    title="复制密钥"
+                    copied={copiedId === k.id}
+                    onClick={() => onCopyKey(k)}
+                  />
+                </span>
+              </RowSub>
               <RowActions>
                 <ActBtn
                   disabled={busy === "sm" + k.id}

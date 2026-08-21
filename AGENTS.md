@@ -346,9 +346,13 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   搜索词以 URL query 为**唯一事实来源**(`use_url_state.ts`:首帧/SSR 为空以避免
   hydration mismatch,挂载后一帧补上);选中只由点击或 URL 显式触发,**无「候选恰剩
   一项时自动选中」的隐式收敛**。行操作:站点 检测/编辑/删除,账号 签到/拉Key(新增
-  Key 后自动拉模型)/编辑/删除,Key 拉取模型/删除;启停经
-  PATCH。模型叶子:端点类型下拉(PATCH endpointType)、映射下拉(PATCH
-  modelId,含「清除映射」→ null 与「＋新增统一模型」→ POST
+  Key 后自动拉模型)/编辑/删除,Key 拉取模型/删除;启停经 PATCH。APIKey
+  行的密钥密文右侧有复制按钮(`components/clipboard.ts`:优先
+  `navigator.clipboard`,非安全上下文退回 `execCommand`
+  选区兜底),复制的是列表接口原样返回的**完整明文 Key**(密文仅前端 `maskKey`
+  展示),成功后按钮短暂显示对勾并走 flash 提示。 模型叶子:端点类型下拉(PATCH
+  endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
+  与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
   a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」按钮成功后**仅在前端**追加
   一次 best-effort `sync-quota` 刷额度——后端 `checkinAccount`(及
