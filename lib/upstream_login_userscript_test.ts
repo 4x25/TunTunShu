@@ -802,12 +802,13 @@ Deno.test("upstream login userscript active 模式隔离旧版 Storage 并限制
     USER_ID,
     "legacy uid shadow mismatch",
   );
-  harness.localStorage.setItem("user", "shadow-write");
-  harness.localStorage.setItem("uid", "shadow-uid");
+  const updatedUser = { ...USER, username: "alice-updated" };
+  harness.localStorage.setItem("user", JSON.stringify(updatedUser));
+  harness.localStorage.setItem("uid", USER_ID);
   harness.localStorage.setItem("theme", "light");
   assertEquals(
     harness.localStorage.getItem("user"),
-    "shadow-write",
+    JSON.stringify(updatedUser),
     "legacy user write did not stay in shadow",
   );
   assertEquals(

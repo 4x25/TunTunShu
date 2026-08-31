@@ -393,7 +393,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - 脚本只覆写当前页面 realm 的同 origin `/api/*` fetch/XHR,覆盖页面自带的两项
   鉴权头;fetch 普通 API 强制 `credentials:"omit"`,XHR 则依赖启动阶段先清除
   Cookie(浏览器无法禁止同源 XHR 携带之后重新产生的 Cookie)。外域、静态资源与
-  `/v1/*` 不注入。 旧版路由守卫通过仅限当前标签的 `localStorage.user/uid` shadow
+  `/v1/*` 不注入;旧版路由守卫通过仅限当前标签的 `localStorage.user/uid` shadow
   兼容。新版 `/api/user/auth/refresh` 被转换为 PAT `/api/user/self`
   校验并返回前端 AuthBundle: `access_token` 始终为原
   PAT,`access_expires_at=253402300799`,其中 `session`
@@ -401,8 +401,8 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   `/api/user/token` 落网,不会生成或轮换 PAT。Session
   管理、2FA、Passkey、Security Proof、Playground 等真实 Session
   专属功能不受支持;WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch
-  与其他 realm 也不承诺拦截。 上游原生 logout 或旧版清除 `localStorage.user/uid`
-  时会立即删除免登状态并停用 当前页补丁,避免 SPA 同页重新登录后仍误用旧
+  与其他 realm 也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
+  时会立即删除免登状态并停用当前页补丁,避免 SPA 同页重新登录后仍误用旧
   PAT;退出统一导航旧版兼容路径 `/login`(新版会自行重定向到 `/sign-in`)。
 - **ModelsApp** 通道弹窗有一个真实代理往返测试(`POST /v1/chat/completions`)。
 - **LogsApp(系统日志)**:关联对象分三列(站点/账号/APIKey),有值单元格是链接,跳

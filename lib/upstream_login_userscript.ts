@@ -284,12 +284,15 @@ export function buildUpstreamLoginUserScript(
   }
 
   function persistShadowUser(value) {
-    shadowUser = value;
     var parsed = parseJson(value);
     if (validUser(parsed, login.userId)) {
+      shadowUser = value;
       login.user = parsed;
       try { sessionSet(login); } catch (_) {}
+      return;
     }
+    deactivateLogin();
+    nativeStorageSet.call(localStorage, "user", value);
   }
 
   storageProto.getItem = function (key) {
@@ -307,7 +310,12 @@ export function buildUpstreamLoginUserScript(
       return;
     }
     if (this === localStorage && name === "uid") {
-      shadowUid = String(value);
+      var nextUid = String(value);
+      if (nextUid !== login.userId) {
+        deactivateLogin();
+        return nativeStorageSet.call(this, name, nextUid);
+      }
+      shadowUid = nextUid;
       return;
     }
     return nativeStorageSet.call(this, name, String(value));
