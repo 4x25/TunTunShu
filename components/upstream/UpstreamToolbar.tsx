@@ -1,11 +1,19 @@
 import type { Flash } from "./types.ts";
 
 export function UpstreamToolbar(
-  { flash, busy, onRefresh, onReset, onQuickEntry }: {
+  {
+    flash,
+    busy,
+    onRefresh,
+    onReset,
+    onInstallLoginScript,
+    onQuickEntry,
+  }: {
     flash: Flash | null;
     busy: string | null;
     onRefresh: () => void;
     onReset: () => void;
+    onInstallLoginScript: () => void;
     onQuickEntry: () => void;
   },
 ) {
@@ -32,6 +40,14 @@ export function UpstreamToolbar(
         </button>
         <button type="button" class="btn btn-ghost btn-sm" onClick={onReset}>
           清除筛选
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          title="安装油猴脚本,免输密码打开 new-api 上游账号"
+          onClick={onInstallLoginScript}
+        >
+          免登脚本
         </button>
         <button
           type="button"

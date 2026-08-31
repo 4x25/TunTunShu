@@ -24,6 +24,7 @@ export function AccountColumn(
     onCreate,
     onPick,
     onToggle,
+    onLogin,
     onCheckin,
     onSyncKeys,
     onEdit,
@@ -41,6 +42,7 @@ export function AccountColumn(
     onCreate: () => void;
     onPick: (id: string) => void;
     onToggle: (account: Account) => void;
+    onLogin: (account: Account) => void;
     onCheckin: (account: Account) => void;
     onSyncKeys: (account: Account) => void;
     onEdit: (account: Account) => void;
@@ -116,6 +118,7 @@ export function AccountColumn(
                   {usd(a.quota).toFixed(2)}
                 </RowSub>
                 <RowActions>
+                  <ActBtn onClick={() => onLogin(a)}>登录</ActBtn>
                   <ActBtn
                     tone={ciTone}
                     title={checkinMsg[a.id] || undefined}

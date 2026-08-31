@@ -10,6 +10,7 @@ export interface Site {
 export interface Account {
   id: string;
   site_id: string;
+  site_origin?: string | null;
   name: string;
   user_id: string;
   access_token: string;
