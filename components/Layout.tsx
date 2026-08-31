@@ -62,7 +62,7 @@ export function Layout(
 
       <footer class="appfoot">
         <div class="appfoot-inner">
-          <span class="ver">v1.4.2</span>
+          <span class="ver">v1.5.0</span>
           <span class="sep">·</span>
           {footerIcons
             ? (

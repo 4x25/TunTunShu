@@ -85,10 +85,11 @@ Deploy 在推送时自动完成。
 
 ## Entrypoint & Startup(main.ts)
 
-启动顺序:`app.use(staticFiles())` → 中间件服务 `GET /tuntunshu.user.js`(无鉴权)→
-`await initializeDatabase()` → `if (typeof Deno.cron === "function")` 注册 5 个
-cron 任务(schedule 在此处经 `getSettings()` **一次性**读取,每个任务体各自
-try/catch)→ `app.fsRoutes()`。main.ts 里没有显式 `Deno.serve`——服务由
+启动顺序:`app.use(staticFiles())` → 中间件服务 `GET /tuntunshu.user.js` 与
+`GET /tuntunshu-login.user.js`(均无鉴权)→ `await initializeDatabase()` →
+`if (typeof Deno.cron === "function")` 注册 5 个 cron 任务(schedule 在此处经
+`getSettings()` **一次性**读取,每个任务体各自 try/catch)→
+`app.fsRoutes()`。main.ts 里没有显式 `Deno.serve`——服务由
 `deno serve _fresh/server.js` (生产)或 `vite`(开发)启动。
 
 ## Directory map
@@ -105,7 +106,7 @@ adapters/new_api_adapter.ts   对上游 new-api HTTP 的薄 fetch 封装
 db/client.ts     postgres 单例 getSql()(max:5, idle_timeout:20, connect_timeout:10;池被 cron 与 HTTP 共用)
 db/init.ts       启动时建表(见 Database)
 jobs/            5 个 cron 任务函数 + runner.ts(串行批处理器)
-lib/             auth、env、config(defaultSettings)、mask、request、response、sse、userscript、test_images
+lib/             auth、env、config(defaultSettings)、mask、request、response、sse、userscript、upstream_login_userscript、test_images
 types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端接口,islands 并不引用)、openai.ts
 ```
 
@@ -370,6 +371,39 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   -1`(**必须显式传 -1**,零值 0 会被 new-api
   当作已过期)的 `DEFAULT` 密钥;全程 best-effort,且只回传
   siteId/userId/accessToken,**不回传 APIKey**(由后端 同步拉取)。
+- **上游账号 PAT 免登**:工具栏「免登脚本」安装公开的
+  `/tuntunshu-login.user.js`(`lib/upstream_login_userscript.ts`,脚本版本
+  `1.0.0`), 账号行「登录」仅在当前页检测到脚本同步暴露的
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "1.0.0"` 后才会构造并打开
+  `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...`。未安装或
+  版本不符时**不得把 PAT 放入 URL**,只提示并打开安装入口。账号列表额外返回
+  `site_origin` 供登录使用(仍保留裸 `site_id`),避免站点分页尚未加载时无法登录;
+  站点必须是无路径、查询、fragment 或 URL 用户信息的纯 `http(s)`
+  origin。新标签以 `noopener,noreferrer` 打开,脚本以最终页面的 `location.origin`
+  为准。
+- 免登脚本在 `document-start` 把 fragment 凭据转存为当前标签的
+  `sessionStorage["tts-upstream-login"]`,同步清 fragment 并停掉首次页面加载。
+  它先用不带 PAT 的新/旧 logout 清原 Cookie session 和共享
+  `localStorage.user/uid`,再以 `credentials:"omit"` +
+  `Authorization: Bearer <accessToken>` + `New-Api-User: <userId>` 请求
+  `/api/user/self`;仅业务成功且返回用户 ID 一致时激活并 reload,失败一律清状态。
+  active 状态在刷新后恢复,关闭标签后随 sessionStorage 消失;同 origin
+  的其他普通登录标签会被一并登出,复制标签/浏览器会话恢复可能复制凭据,HTTP
+  上游会显示明文风险警告。
+- 脚本只覆写当前页面 realm 的同 origin `/api/*` fetch/XHR,覆盖页面自带的两项
+  鉴权头;fetch 普通 API 强制 `credentials:"omit"`,XHR 则依赖启动阶段先清除
+  Cookie(浏览器无法禁止同源 XHR 携带之后重新产生的 Cookie)。外域、静态资源与
+  `/v1/*` 不注入;旧版路由守卫通过仅限当前标签的 `localStorage.user/uid` shadow
+  兼容。新版 `/api/user/auth/refresh` 被转换为 PAT `/api/user/self`
+  校验并返回前端 AuthBundle: `access_token` 始终为原
+  PAT,`access_expires_at=253402300799`,其中 `session`
+  只是前端结构校验所需的占位对象,**不会在 new-api 后端创建 Session**。脚本禁止
+  `/api/user/token` 落网,不会生成或轮换 PAT。Session
+  管理、2FA、Passkey、Security Proof、Playground 等真实 Session
+  专属功能不受支持;WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch
+  与其他 realm 也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
+  时会立即删除免登状态并停用当前页补丁,避免 SPA 同页重新登录后仍误用旧
+  PAT;退出统一导航旧版兼容路径 `/login`(新版会自行重定向到 `/sign-in`)。
 - **ModelsApp** 通道弹窗有一个真实代理往返测试(`POST /v1/chat/completions`)。
 - **LogsApp(系统日志)**:关联对象分三列(站点/账号/APIKey),有值单元格是链接,跳
   `/upstream?site=&account=&key=`
@@ -386,6 +420,11 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `lib/sse_test.ts`:SSE usage 嗅探、跨分片重组、无 usage 时返回 null。
 - `lib/userscript_test.ts`:用轻量浏览器 mock 执行生成脚本,覆盖新旧 new-api
   鉴权顺序、401 fallback、Bearer 隔离、分页已录入判定、录入与取消覆盖。
+- `lib/upstream_login_userscript_test.ts`:覆盖免登脚本元数据与普通页面无副作用、
+  fragment 两阶段启动、logout 与 `/self` 校验、sessionStorage/Storage shadow、
+  fetch/XHR 同源注入及外域隔离、新版 AuthBundle、禁止 PAT 轮换与退出清理。
+- `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
+  HTTP(S) origin 校验与 fragment 凭据编码。
 
 运行 `deno test -A`。
 
@@ -408,5 +447,7 @@ Fresh
   node_modules 解析这些裸导入。新增 AI SDK 依赖时同步这份清单。
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。
-- 版本号:UI 页脚/登录页显示 `v1.4.2`,油猴脚本独立 `@version 1.3.2`;`deno.json`
-  无 version 字段。
+- `GET /tuntunshu-login.user.js` 同样无鉴权,但源码只包含通用免登逻辑和自身
+  安装/更新 URL;PAT/userId 仅在账号「登录」点击后进入目标上游的 URL fragment。
+- 版本号:UI 页脚/登录页显示 `v1.5.0`,快捷录入油猴脚本独立 `@version 1.3.2`,
+  上游免登油猴脚本独立 `@version 1.0.0`;`deno.json` 无 version 字段。

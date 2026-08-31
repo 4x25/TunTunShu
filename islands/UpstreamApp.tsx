@@ -15,6 +15,11 @@ import { ResourceModal } from "../components/upstream/ResourceModal.tsx";
 import { SiteColumn } from "../components/upstream/SiteColumn.tsx";
 import { TestResultModal } from "../components/upstream/TestResultModal.tsx";
 import { UpstreamModelColumn } from "../components/upstream/UpstreamModelColumn.tsx";
+import {
+  buildUpstreamLoginUrl,
+  isUpstreamLoginScriptInstalled,
+  UPSTREAM_LOGIN_SCRIPT_PATH,
+} from "../components/upstream/upstream_login.ts";
 import { UpstreamToolbar } from "../components/upstream/UpstreamToolbar.tsx";
 import { useResourceDialogs } from "../components/upstream/use_resource_dialogs.ts";
 import { useUpstreamPages } from "../components/upstream/use_upstream_pages.ts";
@@ -30,6 +35,10 @@ import type {
   TestView,
   UpstreamModel,
 } from "../components/upstream/types.ts";
+
+function openDetached(url: string) {
+  globalThis.open(url, "_blank", "noopener,noreferrer");
+}
 
 export default function UpstreamApp() {
   const [u, setU] = useUrlState();
@@ -494,6 +503,38 @@ export default function UpstreamApp() {
     const url = `/tuntunshu.user.js?key=${encodeURIComponent(getToken())}`;
     globalThis.open(url, "_blank");
   };
+  const installLoginScript = () => {
+    openDetached(UPSTREAM_LOGIN_SCRIPT_PATH);
+  };
+  const loginUpstream = (account: Account) => {
+    if (!isUpstreamLoginScriptInstalled(globalThis)) {
+      showFlash("请先安装免登脚本并刷新囤囤鼠页面", false);
+      installLoginScript();
+      return;
+    }
+
+    const siteOrigin = account.site_origin ??
+      sites.find((candidate) => candidate.id === account.site_id)?.origin;
+    if (!siteOrigin) {
+      showFlash(`未找到账号「${account.name}」所属站点`, false);
+      return;
+    }
+
+    try {
+      openDetached(
+        buildUpstreamLoginUrl(
+          siteOrigin,
+          account.access_token,
+          account.user_id,
+        ),
+      );
+    } catch (error) {
+      showFlash(
+        error instanceof Error ? error.message : "站点 Origin 无效",
+        false,
+      );
+    }
+  };
 
   return (
     <>
@@ -502,6 +543,7 @@ export default function UpstreamApp() {
         busy={busy}
         onRefresh={refreshAll}
         onReset={resetAll}
+        onInstallLoginScript={installLoginScript}
         onQuickEntry={quickEntry}
       />
 
@@ -534,6 +576,7 @@ export default function UpstreamApp() {
           onCreate={() => openCreate("account")}
           onPick={pickAccount}
           onToggle={toggleAcc}
+          onLogin={loginUpstream}
           onCheckin={checkin}
           onSyncKeys={syncKeys}
           onEdit={openEditAccount}

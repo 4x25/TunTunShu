@@ -324,7 +324,10 @@ export async function listAccounts(params: PageParams) {
   );
   const pageValues = [...values, params.pageSize, params.offset];
   const items = await sql.unsafe(
-    `select distinct accounts.* ${fromSql} ${whereSql}
+    `select distinct accounts.*,
+       (select site_lookup.origin from sites site_lookup
+        where site_lookup.id = accounts.site_id) as site_origin
+     ${fromSql} ${whereSql}
      order by accounts.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
     pageValues,

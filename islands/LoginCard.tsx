@@ -106,7 +106,7 @@ export default function LoginCard() {
       </form>
 
       <div class="login-foot">
-        v1.4.2 · <a href="#">文档</a> · <a href="#">GitHub</a>
+        v1.5.0 · <a href="#">文档</a> · <a href="#">GitHub</a>
       </div>
     </main>
   );
