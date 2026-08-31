@@ -1134,6 +1134,35 @@ Deno.test("upstream login userscript logout 后停用补丁且不发送占位 Se
     !xhrAfter?.headers["new-api-user"],
     "disabled XHR wrapper injected the old user id",
   );
+
+  const clearHarness = createHarness({ storedSession: activeSession() });
+  clearHarness.execute();
+  await settle();
+  clearHarness.localStorage.clear();
+  assertEquals(
+    clearHarness.sessionStorage.getItem(SESSION_KEY),
+    null,
+    "localStorage.clear retained the PAT session",
+  );
+});
+
+Deno.test("upstream login userscript XHR refresh 失败时主动停用免登", async () => {
+  const harness = createHarness({
+    storedSession: activeSession(),
+    selfStatus: 401,
+    selfBody: { success: false, message: "expired" },
+  });
+  harness.execute();
+  await settle();
+
+  const xhr = harness.createXhr();
+  xhr.open("POST", "/api/user/auth/refresh");
+  await sendXhr(xhr);
+  assertEquals(
+    harness.sessionStorage.getItem(SESSION_KEY),
+    null,
+    "failed XHR refresh retained the PAT session without reading its body",
+  );
 });
 
 Deno.test("upstream login userscript 浮条展示限制并清理退出状态", async () => {

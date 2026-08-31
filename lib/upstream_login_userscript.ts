@@ -43,6 +43,7 @@ export function buildUpstreamLoginUserScript(
   var nativeStorageGet = storageProto.getItem;
   var nativeStorageSet = storageProto.setItem;
   var nativeStorageRemove = storageProto.removeItem;
+  var nativeStorageClear = storageProto.clear;
 
   function sessionGet() {
     try {
@@ -333,6 +334,12 @@ export function buildUpstreamLoginUserScript(
     }
     return nativeStorageRemove.call(this, name);
   };
+  storageProto.clear = function () {
+    if (loginEnabled && (this === localStorage || this === sessionStorage)) {
+      deactivateLogin();
+    }
+    return nativeStorageClear.call(this);
+  };
 
   function isSameOriginApi(url) {
     return url.origin === location.origin &&
@@ -608,6 +615,7 @@ export function buildUpstreamLoginUserScript(
         return text;
       },
     });
+    nativeXhrAddListener.call(xhr, "loadend", transformedText, { once: true });
   }
 
   xhrProto.send = function (body) {
