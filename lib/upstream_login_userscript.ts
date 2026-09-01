@@ -19,7 +19,50 @@ export function buildUpstreamLoginUserScript(
 // @updateURL    ${installUrl}
 // @downloadURL  ${installUrl}
 // ==/UserScript==
-(function () {
+${buildUpstreamLoginRuntimeSource()}`;
+}
+
+export interface UpstreamAutomationBootstrap {
+  origin: string;
+  accessToken: string;
+  userId: string;
+  user: { id: number | string; username: string; role: number };
+  tabNonce: string;
+  createdAt: number;
+}
+
+function serializeAutomationBootstrap(
+  bootstrap: UpstreamAutomationBootstrap,
+): string {
+  return JSON.stringify(bootstrap)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+}
+
+/**
+ * CloakBrowser 使用的单一 document-start init script。shared runtime 会同步读取并
+ * 删除临时属性，凭据不会进入 URL、history、localStorage 或 sessionStorage。
+ */
+export function buildUpstreamAutomationInitScript(
+  bootstrap: UpstreamAutomationBootstrap,
+): string {
+  return `if (globalThis.top === globalThis && location.origin === ${
+    JSON.stringify(bootstrap.origin)
+  }) {
+  Object.defineProperty(globalThis, "__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__", {
+    configurable: true,
+    enumerable: false,
+    writable: false,
+    value: ${serializeAutomationBootstrap(bootstrap)}
+  });
+}
+${buildUpstreamLoginRuntimeSource()}`;
+}
+
+/** 免登油猴脚本与 CloakBrowser automation 共用的页面鉴权 runtime。 */
+export function buildUpstreamLoginRuntimeSource(): string {
+  return `(function () {
   "use strict";
 
   var SCRIPT_VERSION = "1.0.0";
@@ -170,7 +213,7 @@ export function buildUpstreamLoginUserScript(
   async function requestSelf(accessToken, userId) {
     var response = await nativeFetch("/api/user/self", {
       method: "GET",
-      credentials: "omit",
+      credentials: memoryOnly ? "include" : "omit",
       headers: {
         "Authorization": "Bearer " + accessToken,
         "New-Api-User": userId,
@@ -249,15 +292,39 @@ export function buildUpstreamLoginUserScript(
     return true;
   }
 
-  if (bootstrapFromFragment()) return;
-
-  var login = readStoredSession();
+  var automation = globalThis.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__;
+  try { delete globalThis.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__; } catch (_) {
+    globalThis.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__ = undefined;
+  }
+  var memoryOnly = !!automation;
+  var login;
+  if (memoryOnly) {
+    // 自动化凭据只存在当前 document 的闭包中；先清除 profile 可能遗留的旧状态。
+    sessionRemove();
+    try {
+      nativeStorageRemove.call(localStorage, "user");
+      nativeStorageRemove.call(localStorage, "uid");
+    } catch (_) {}
+    login = {
+      version: 1,
+      phase: "active",
+      origin: automation.origin,
+      accessToken: automation.accessToken,
+      userId: automation.userId,
+      user: automation.user,
+      tabNonce: automation.tabNonce,
+      createdAt: automation.createdAt,
+    };
+  } else {
+    if (bootstrapFromFragment()) return;
+    login = readStoredSession();
+    if (globalThis.opener) {
+      sessionRemove();
+      return;
+    }
+  }
   if (!validActive(login)) {
     if (sessionGet()) sessionRemove();
-    return;
-  }
-  if (globalThis.opener) {
-    sessionRemove();
     return;
   }
   if (globalThis[PATCHED]) return;
@@ -289,7 +356,9 @@ export function buildUpstreamLoginUserScript(
     if (validUser(parsed, login.userId)) {
       shadowUser = value;
       login.user = parsed;
-      try { sessionSet(login); } catch (_) {}
+      if (!memoryOnly) {
+        try { sessionSet(login); } catch (_) {}
+      }
       return;
     }
     deactivateLogin();
@@ -305,9 +374,11 @@ export function buildUpstreamLoginUserScript(
   };
   storageProto.setItem = function (key, value) {
     var name = String(key);
-    if (!loginEnabled) return nativeStorageSet.call(this, name, String(value));
+    var stringValue = String(value);
+    if (!loginEnabled) return nativeStorageSet.call(this, name, stringValue);
+    if (memoryOnly && stringValue.indexOf(login.accessToken) !== -1) return;
     if (this === localStorage && name === "user") {
-      persistShadowUser(String(value));
+      persistShadowUser(stringValue);
       return;
     }
     if (this === localStorage && name === "uid") {
@@ -319,7 +390,7 @@ export function buildUpstreamLoginUserScript(
       shadowUid = nextUid;
       return;
     }
-    return nativeStorageSet.call(this, name, String(value));
+    return nativeStorageSet.call(this, name, stringValue);
   };
   storageProto.removeItem = function (key) {
     var name = String(key);
@@ -413,7 +484,7 @@ export function buildUpstreamLoginUserScript(
       var user = await requestSelf(login.accessToken, login.userId);
       login.user = user;
       shadowUser = JSON.stringify(user);
-      sessionSet(login);
+      if (!memoryOnly) sessionSet(login);
       return new Response(JSON.stringify(createAuthBundle(user)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -450,7 +521,7 @@ export function buildUpstreamLoginUserScript(
       next.credentials = "include";
     } else {
       next.headers = authHeaders(sourceHeaders);
-      next.credentials = "omit";
+      next.credentials = memoryOnly ? "include" : "omit";
     }
 
     if (request) {
@@ -595,7 +666,9 @@ export function buildUpstreamLoginUserScript(
       if (body && body.success === true && validUser(body.data, login.userId)) {
         login.user = body.data;
         shadowUser = JSON.stringify(body.data);
-        try { sessionSet(login); } catch (_) {}
+        if (!memoryOnly) {
+          try { sessionSet(login); } catch (_) {}
+        }
         cached = JSON.stringify(createAuthBundle(body.data));
       } else {
         deactivateLogin();
@@ -681,8 +754,10 @@ export function buildUpstreamLoginUserScript(
     document.body.appendChild(bar);
   }
 
-  if (document.body) renderBanner();
-  else document.addEventListener("DOMContentLoaded", renderBanner, { once: true });
+  if (!memoryOnly) {
+    if (document.body) renderBanner();
+    else document.addEventListener("DOMContentLoaded", renderBanner, { once: true });
+  }
 })();
 `;
 }

@@ -12,6 +12,12 @@ export async function getSettings() {
     settings[row.key] = row.value;
   }
   settings.proxy_auth_keys = normalizeProxyKeys(settings.proxy_auth_keys);
+  settings.browser_checkin_enabled = normalizeBrowserCheckinEnabled(
+    settings.browser_checkin_enabled,
+  );
+  settings.browser_checkin_timeout_seconds = normalizeBrowserCheckinTimeout(
+    settings.browser_checkin_timeout_seconds,
+  );
   return settings;
 }
 
@@ -22,6 +28,10 @@ export async function updateSettings(input: Record<string, string>) {
     if (!allowedKeys.has(key)) continue;
     const normalizedValue = key === "proxy_auth_keys"
       ? normalizeProxyKeys(value)
+      : key === "browser_checkin_enabled"
+      ? normalizeBrowserCheckinEnabled(value)
+      : key === "browser_checkin_timeout_seconds"
+      ? normalizeBrowserCheckinTimeout(value)
       : value;
     await sql`
       insert into system_settings (key, value, updated_at)
@@ -35,4 +45,16 @@ export async function updateSettings(input: Record<string, string>) {
 function normalizeProxyKeys(value: string) {
   const keys = value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
   return Array.from(new Set([getAuthKey(), ...keys])).join("\n");
+}
+
+export function normalizeBrowserCheckinEnabled(value: string | undefined) {
+  return value === "true" ? "true" : "false";
+}
+
+export function normalizeBrowserCheckinTimeout(value: string | undefined) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed)) {
+    return defaultSettings.browser_checkin_timeout_seconds;
+  }
+  return String(Math.min(120, Math.max(30, parsed)));
 }

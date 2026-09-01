@@ -16,6 +16,22 @@ const isAiExternal = (id: string): boolean =>
   /[/]ai@\d/.test(id) ||
   /[/]node_modules[/]ai[/]/.test(id);
 
+// CloakBrowser 与 Playwright 只在服务端运行,且运行时需要原始包目录、浏览器二进制
+// 与 Node 内建模块。和 AI SDK 一样保持 external,交给 Deno 的 npm 兼容层解析。
+const isBrowserExternal = (id: string): boolean =>
+  id === "cloakbrowser" ||
+  id.startsWith("cloakbrowser/") ||
+  id === "playwright-core" ||
+  id.startsWith("playwright-core/") ||
+  id.includes("cloakbrowser@") ||
+  id.includes("cloakbrowser+") ||
+  id.includes("playwright-core@") ||
+  id.includes("playwright-core+") ||
+  /[/]node_modules[/](cloakbrowser|playwright-core)([/]|$)/.test(id);
+
+const isServerExternal = (id: string): boolean =>
+  isAiExternal(id) || isBrowserExternal(id);
+
 export default defineConfig({
   plugins: [fresh(), tailwindcss()],
   ssr: {
@@ -28,7 +44,9 @@ export default defineConfig({
       "@ai-sdk/provider",
       "@ai-sdk/provider-utils",
       "@vercel/oidc",
+      "cloakbrowser",
+      "playwright-core",
     ],
   },
-  build: { rollupOptions: { external: isAiExternal } },
+  build: { rollupOptions: { external: isServerExternal } },
 });

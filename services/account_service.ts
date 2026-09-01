@@ -8,11 +8,27 @@ import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
 import { isUniqueViolation } from "./site_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
+import {
+  browserCheckinEnabled,
+  browserCheckinTimeoutMs,
+  classifyDirectCheckin,
+} from "./checkin_classifier.ts";
+import {
+  acquireBrowserCheckinLease,
+  type BrowserCheckinLease,
+  type BrowserCheckinLeaseBusy,
+} from "./browser_checkin_lease_service.ts";
+import {
+  type BrowserCheckinCode,
+  type BrowserCheckinResult,
+  runBrowserCheckin,
+} from "./browser_checkin_service.ts";
+import { getSettings } from "./settings_service.ts";
 
 const adapter = new NewApiAdapter();
 const TOKEN_PAGE_SIZE = 100;
 
-interface AccountWithOrigin {
+export interface AccountWithOrigin {
   id: number;
   site_id: number;
   user_id: string;
@@ -568,31 +584,245 @@ export async function deleteAccount(id: number) {
   await sql`delete from accounts where id = ${id}`;
 }
 
-interface CheckinResult {
-  success: boolean;
-  message: string;
-  quotaAwarded: number | null;
+type CheckinTaskStatus = "success" | "failed" | "skipped";
+type CheckinMethod = "direct" | "browser";
+
+export interface CheckinAutomation {
+  attempted: boolean;
+  code: BrowserCheckinCode | "disabled" | "busy";
+  durationMs: number;
 }
 
-/** new-api 签到接口 HTTP 恒为 200,业务结果在 body;非 JSON(站点异常)返回 null。 */
-function parseCheckinResult(text: string): CheckinResult | null {
+export interface AccountCheckinExecution {
+  checkinStatus: CheckinStatus;
+  taskStatus: CheckinTaskStatus;
+  checkinMethod: CheckinMethod;
+  message: string;
+  status?: number;
+  body?: string;
+  error?: string;
+  automation?: CheckinAutomation;
+}
+
+export interface CheckinDependencies {
+  loadSettings: typeof getSettings;
+  directCheckin: (
+    auth: NewApiUserAuth,
+    signal: AbortSignal,
+  ) => Promise<Response>;
+  acquireLease: (options: {
+    maxWaitMs: number;
+    ttlMs: number;
+    heartbeatMs: number;
+  }) => Promise<BrowserCheckinLease | BrowserCheckinLeaseBusy>;
+  browserCheckin: (input: {
+    origin: string;
+    userId: string;
+    accessToken: string;
+    timeoutMs: number;
+  }) => Promise<BrowserCheckinResult>;
+  now: () => number;
+}
+
+const defaultCheckinDependencies: CheckinDependencies = {
+  loadSettings: getSettings,
+  directCheckin: (auth, signal) => adapter.checkin(auth, signal),
+  acquireLease: (options) => acquireBrowserCheckinLease(options),
+  browserCheckin: runBrowserCheckin,
+  now: () => performance.now(),
+};
+
+function failedExecution(error: unknown): AccountCheckinExecution {
+  const message = errorMessage(error);
+  return {
+    checkinStatus: "failed",
+    taskStatus: "failed",
+    checkinMethod: "direct",
+    message,
+    error: message,
+  };
+}
+
+/**
+ * Execute direct check-in plus the optional browser fallback without touching
+ * account/log tables. Dependency injection keeps orchestration testable.
+ */
+export async function executeAccountCheckin(
+  account: AccountWithOrigin,
+  dependencies: Partial<CheckinDependencies> = {},
+): Promise<AccountCheckinExecution> {
+  const deps = { ...defaultCheckinDependencies, ...dependencies };
+  let settings: Awaited<ReturnType<typeof getSettings>>;
+  let response: Response;
   try {
-    const obj = JSON.parse(text) as {
-      success?: boolean;
-      message?: string;
-      data?: { quota_awarded?: number } | null;
-    };
-    if (typeof obj?.success !== "boolean") return null;
-    return {
-      success: obj.success,
-      message: obj.message ?? "",
-      quotaAwarded: typeof obj.data?.quota_awarded === "number"
-        ? obj.data.quota_awarded
-        : null,
-    };
-  } catch {
-    return null;
+    settings = await deps.loadSettings();
+    response = await deps.directCheckin(
+      accountAuth(account),
+      AbortSignal.timeout(15_000),
+    );
+  } catch (error) {
+    return failedExecution(error);
   }
+
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (error) {
+    return failedExecution(error);
+  }
+  const direct = classifyDirectCheckin({
+    status: response.status,
+    headers: response.headers,
+    body,
+  });
+  const directBase = { status: response.status, body };
+  if (direct.kind === "checked") {
+    return {
+      ...directBase,
+      checkinStatus: "checked",
+      taskStatus: "success",
+      checkinMethod: "direct",
+      message: direct.message,
+    };
+  }
+  if (direct.kind === "failed") {
+    return {
+      ...directBase,
+      checkinStatus: "failed",
+      taskStatus: "failed",
+      checkinMethod: "direct",
+      message: direct.message,
+    };
+  }
+
+  if (!browserCheckinEnabled(settings.browser_checkin_enabled)) {
+    return {
+      ...directBase,
+      checkinStatus: "manual_required",
+      taskStatus: "skipped",
+      checkinMethod: "direct",
+      message: `${direct.message}；浏览器自动签到未启用`,
+      automation: { attempted: false, code: "disabled", durationMs: 0 },
+    };
+  }
+
+  const timeoutMs = browserCheckinTimeoutMs(
+    settings.browser_checkin_timeout_seconds,
+  );
+  const automationStartedAt = deps.now();
+  let lease: BrowserCheckinLease | BrowserCheckinLeaseBusy;
+  try {
+    lease = await deps.acquireLease({
+      maxWaitMs: Math.min(10_000, timeoutMs),
+      ttlMs: 150_000,
+      heartbeatMs: 20_000,
+    });
+  } catch {
+    const durationMs = Math.max(0, deps.now() - automationStartedAt);
+    return {
+      ...directBase,
+      checkinStatus: "manual_required",
+      taskStatus: "failed",
+      checkinMethod: "direct",
+      message: `${direct.message}；浏览器自动签到租约不可用`,
+      automation: {
+        attempted: false,
+        code: "internal_error",
+        durationMs,
+      },
+    };
+  }
+  if (!lease.acquired) {
+    return {
+      ...directBase,
+      checkinStatus: "manual_required",
+      taskStatus: "skipped",
+      checkinMethod: "direct",
+      message: `${direct.message}；浏览器自动签到繁忙`,
+      automation: {
+        attempted: false,
+        code: "busy",
+        durationMs: Math.max(lease.waitedMs, deps.now() - automationStartedAt),
+      },
+    };
+  }
+
+  const elapsedBeforeBrowser = Math.max(0, deps.now() - automationStartedAt);
+  const remainingMs = timeoutMs - elapsedBeforeBrowser;
+  if (remainingMs <= 0) {
+    await lease.release().catch(() => undefined);
+    return {
+      ...directBase,
+      checkinStatus: "manual_required",
+      taskStatus: "skipped",
+      checkinMethod: "direct",
+      message: `${direct.message}；浏览器自动签到繁忙`,
+      automation: {
+        attempted: false,
+        code: "busy",
+        durationMs: Math.max(timeoutMs, deps.now() - automationStartedAt),
+      },
+    };
+  }
+
+  const stopHeartbeat = lease.startHeartbeat();
+  let browserResult: BrowserCheckinResult;
+  let quarantineLease = false;
+  try {
+    browserResult = await deps.browserCheckin({
+      origin: account.origin,
+      userId: account.user_id,
+      accessToken: account.access_token,
+      timeoutMs: remainingMs,
+    });
+    quarantineLease = browserResult.code === "cleanup_failed";
+  } catch {
+    browserResult = {
+      ok: false,
+      code: "internal_error",
+      message: "浏览器执行器异常",
+      durationMs: Math.max(0, deps.now() - automationStartedAt),
+    };
+  } finally {
+    try {
+      stopHeartbeat();
+    } finally {
+      if (quarantineLease) {
+        lease.abandon();
+      } else {
+        await lease.release().catch(() => undefined);
+      }
+    }
+  }
+
+  const automation: CheckinAutomation = {
+    attempted: true,
+    code: browserResult.code,
+    durationMs: Math.max(0, deps.now() - automationStartedAt),
+  };
+  const duration = `${(automation.durationMs / 1000).toFixed(1)}s`;
+  if (browserResult.ok) {
+    return {
+      ...directBase,
+      checkinStatus: "checked",
+      taskStatus: "success",
+      checkinMethod: "browser",
+      message:
+        `${direct.message}；浏览器自动签到成功 (${browserResult.code}, ${duration}): ${
+          browserResult.message || "签到成功"
+        }`,
+      automation,
+    };
+  }
+  return {
+    ...directBase,
+    checkinStatus: "manual_required",
+    taskStatus: "failed",
+    checkinMethod: "browser",
+    message:
+      `${direct.message}；浏览器自动签到失败 (${browserResult.code}, ${duration}): ${browserResult.message}`,
+    automation,
+  };
 }
 
 export async function checkinAccount(id: number) {
@@ -613,72 +843,27 @@ export async function checkinAccount(id: number) {
   `;
   const account = rows[0];
   if (!account) return null;
-  try {
-    const response = await adapter.checkin({
-      origin: account.origin,
-      userId: account.user_id,
-      accessToken: account.access_token,
-    });
-    const text = await response.text();
-    const parsed = parseCheckinResult(text);
-
-    let checkinStatus: CheckinStatus;
-    let taskStatus: "success" | "failed" | "skipped";
-    let message: string;
-
-    if (!parsed) {
-      // body 非 JSON(站点挂掉返回 HTML、网关错误等)
-      checkinStatus = "failed";
-      taskStatus = "failed";
-      message = text.slice(0, 1000) || `http ${response.status}`;
-    } else if (parsed.success) {
-      checkinStatus = "checked";
-      taskStatus = "success";
-      message = parsed.quotaAwarded != null
-        ? `签到成功 +${parsed.quotaAwarded}`
-        : (parsed.message || "签到成功");
-    } else if (/已签到|已经签到|已签/.test(parsed.message)) {
-      // 今日已签到,视为已完成,不算失败
-      checkinStatus = "checked";
-      taskStatus = "success";
-      message = parsed.message || "今日已签到";
-    } else if (/turnstile|captcha|验证码|人机验证/i.test(parsed.message)) {
-      // 需要人机验证,自动签到无法完成
-      checkinStatus = "manual_required";
-      taskStatus = "skipped";
-      message = parsed.message;
-    } else {
-      // 其他业务失败(如「签到功能未启用」)
-      checkinStatus = "failed";
-      taskStatus = "failed";
-      message = parsed.message || text.slice(0, 1000);
-    }
-
-    const logId = await createSystemTaskLog({
-      taskType: "account_checkin",
-      status: taskStatus,
-      siteId: account.site_id,
-      accountId: account.id,
-      message: message.slice(0, 1000),
-    });
-    await sql`update accounts set checkin_status = ${checkinStatus}, last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
-    return {
-      ok: checkinStatus === "checked",
-      status: response.status,
-      checkinStatus,
-      message,
-      body: text,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const logId = await createSystemTaskLog({
-      taskType: "account_checkin",
-      status: "failed",
-      siteId: account.site_id,
-      accountId: account.id,
-      message,
-    });
-    await sql`update accounts set checkin_status = 'failed', last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
-    return { ok: false, error: message };
-  }
+  const result = await executeAccountCheckin(account);
+  // One invocation produces exactly one final log, even when direct check-in
+  // falls back to the browser. Attempts are summarized in message/automation.
+  const logId = await createSystemTaskLog({
+    taskType: "account_checkin",
+    status: result.taskStatus,
+    siteId: account.site_id,
+    accountId: account.id,
+    message: result.message.slice(0, 1000),
+  });
+  await sql`update accounts set checkin_status = ${result.checkinStatus}, last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
+  return {
+    ok: result.checkinStatus === "checked",
+    ...(result.status === undefined ? {} : { status: result.status }),
+    checkinStatus: result.checkinStatus,
+    message: result.message,
+    ...(result.body === undefined ? {} : { body: result.body }),
+    ...(result.error === undefined ? {} : { error: result.error }),
+    checkinMethod: result.checkinMethod,
+    ...(result.automation === undefined
+      ? {}
+      : { automation: result.automation }),
+  };
 }

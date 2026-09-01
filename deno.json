@@ -4,7 +4,9 @@
   "tasks": {
     "check": "deno fmt --check . && deno lint . && deno check",
     "dev": "vite",
-    "build": "vite build",
+    "cloak:install": "deno run -A scripts/install_cloakbrowser.ts",
+    "cloak:smoke": "deno run -A scripts/smoke_browser_checkin.ts",
+    "build": "vite build && deno task cloak:install",
     "start": "deno serve -A _fresh/server.js",
     "update": "deno run -A -r jsr:@fresh/update ."
   },
@@ -34,7 +36,10 @@
     "ai": "npm:ai@^7.0.3",
     "@ai-sdk/openai": "npm:@ai-sdk/openai@^4.0.1",
     "@ai-sdk/anthropic": "npm:@ai-sdk/anthropic@^4.0.0",
-    "@ai-sdk/google": "npm:@ai-sdk/google@^4.0.1"
+    "@ai-sdk/google": "npm:@ai-sdk/google@^4.0.1",
+    "cloakbrowser": "npm:cloakbrowser@0.5.10",
+    "playwright-core": "npm:playwright-core@1.62.1",
+    "@types/node": "npm:@types/node@26.0.1"
   },
   "compilerOptions": {
     "lib": [
