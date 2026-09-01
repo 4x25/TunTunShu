@@ -10,7 +10,8 @@ UI。它管理一棵 new-api 资源树(站点 Site → 账号 Account → API Ke
 UpstreamModel),对外暴露 **OpenAI 兼容的 `/v1/*`
 代理**:客户端请求一个逻辑模型名,服务在所有健康的上游候选里随机选一个
 (可选重试)转发并记录 token 用量。后台 `Deno.cron`
-负责签到、额度/模型同步、站点健康检查、日志清理。
+负责签到、额度/模型同步、站点健康检查、日志清理；普通 API 签到遇到可信的
+Cloudflare Challenge / Turnstile 时可用 CloakBrowser 打开个人中心自动完成验证。
 
 **单一身份模型**:一个 `AUTH_KEY` 同时是后台登录口令、浏览器侧 localStorage
 Bearer(`tts-auth`)、 `/api/*` 管理令牌,以及恒定有效的 `/v1` 代理 Key。
@@ -29,6 +30,10 @@ Bearer(`tts-auth`)、 `/api/*` 管理令牌,以及恒定有效的 `/v1` 代理 K
   `ai`、`@ai-sdk/openai|anthropic|google`,**仅**被上游模型测试功能
   (`services/upstream_model_test_service.ts`)使用,与代理无关。必须在
   `vite.config.ts` 里保持 external(见 Gotchas)。
+- **浏览器自动化(仅服务端)**:`cloakbrowser@0.5.10` +
+  `playwright-core@1.62.1`,仅用于签到的人机验证
+  fallback。浏览器二进制在生产构建时下载进 `_fresh/cloakbrowser`,两个 npm
+  包同样必须保持 Vite external。
 - **不使用**: DrizzleORM、Prisma、Hono、React、ShadcnUI。
 
 ## Commands
@@ -36,7 +41,9 @@ Bearer(`tts-auth`)、 `/api/*` 管理令牌,以及恒定有效的 `/v1` 代理 K
 ```bash
 deno task check    # deno fmt --check . && deno lint . && deno check  (注意:deno check 无路径参数)
 deno task dev      # vite(HMR 开发服务器)
-deno task build    # vite build → _fresh/
+deno task cloak:install # 下载 CloakBrowser 二进制到 _fresh/cloakbrowser
+deno task cloak:smoke   # 显式 opt-in 的真实账号浏览器签到冒烟(见 Tests)
+deno task build    # vite build → _fresh/,随后自动执行 cloak:install
 deno task start    # deno serve -A _fresh/server.js(生产)
 deno task update   # deno run -A -r jsr:@fresh/update .
 deno test -A       # 全部自动化测试
@@ -59,7 +66,9 @@ review——子代理不偏袒作者写的代码,能更中立地挑出问题;再
 ## Deploy
 
 已部署到 **Deno Deploy**:**推送代码到仓库即自动触发构建 + 预览**,无需手动部署。
-推送前先在本地跑通上面的校验三步。
+推送前先在本地跑通上面的校验三步。生产构建会把平台对应的 CloakBrowser 二进制
+放入 `_fresh/cloakbrowser`;运行时优先复用该产物并默认禁用自动更新,避免冷启动下载
+或构建后静默换版。
 
 ## CI
 
@@ -68,20 +77,24 @@ ubuntu-latest 上跑四步:`deno install`(补齐
 node_modules——`nodeModulesDir:
 "manual"` 必须先装,否则 `deno check` 因缺包失败)→
 `deno task check`(fmt --check + lint + check 静态校验)→ `deno test -A`(测试)→
-`deno task build`(vite build,验证生产构建——已实测不连数据库,无需任何
-env)。权限收敛为 `contents:
-read`。CI 只做质量门禁,**不负责部署**——部署仍由 Deno
-Deploy 在推送时自动完成。
+`deno task build`(vite build 后下载并校验 CloakBrowser 构建产物;需要能访问
+CloakBrowser 下载源,仍不连接数据库、无需应用必填 env)。权限收敛为
+`contents:
+read`。CI 只做质量门禁,**不负责部署**——部署仍由 Deno Deploy
+在推送时自动完成。
 
 ## Environment
 
-| Env            | 必填 | 默认            | 说明                                                             |
-| -------------- | ---- | --------------- | ---------------------------------------------------------------- |
-| `AUTH_KEY`     | 是   | —               | 管理登录口令 + 默认代理 Key;**首次调用 getAuthKey() 时**才抛错   |
-| `DATABASE_DSN` | 是   | —               | PostgreSQL DSN;缺失时**启动即抛错**(initializeDatabase → getSql) |
-| `HOST`         | 否   | `0.0.0.0`       | 监听地址                                                         |
-| `PORT`         | 否   | `4025`          | 监听端口                                                         |
-| `TZ`           | 否   | `Asia/Shanghai` | 时区;**不影响 cron**——Deno.cron 一律按 UTC 解释                  |
+| Env                        | 必填 | 默认             | 说明                                                                           |
+| -------------------------- | ---- | ---------------- | ------------------------------------------------------------------------------ |
+| `AUTH_KEY`                 | 是   | —                | 管理登录口令 + 默认代理 Key;**首次调用 getAuthKey() 时**才抛错                 |
+| `DATABASE_DSN`             | 是   | —                | PostgreSQL DSN;缺失时**启动即抛错**(initializeDatabase → getSql)               |
+| `HOST`                     | 否   | `0.0.0.0`        | 监听地址                                                                       |
+| `PORT`                     | 否   | `4025`           | 监听端口                                                                       |
+| `TZ`                       | 否   | `Asia/Shanghai`  | 时区;**不影响 cron**——Deno.cron 一律按 UTC 解释                                |
+| `CLOAKBROWSER_LICENSE_KEY` | 否   | —                | 作为 `licenseKey` 传给安装/启动;Free Key 用 latest stable,未设时用 legacy v146 |
+| `CLOAKBROWSER_BINARY_PATH` | 否   | 构建内二进制     | 显式指定已有 Chromium 可执行文件,跳过内置下载路径                              |
+| `CLOAKBROWSER_VERSION`     | 否   | wrapper 对应版本 | 固定完整 Chromium 版本号,供免费/付费版本复现或回滚                             |
 
 ## Entrypoint & Startup(main.ts)
 
@@ -102,11 +115,15 @@ routes/
 islands/         Preact islands(Dashboard/Upstream/Models/Logs/Settings/LoginCard/ThemeToggle)
 components/      Layout、Modal、admin_api.ts(浏览器 API 客户端)、icons、brand_icons、use_url_state
 services/        业务逻辑(被 routes 调用),各自写 system_task_logs
+  checkin_classifier.ts              直连签到结果/可信 Cloudflare challenge 分类 + 浏览器设置归一化
+  browser_checkin_service.ts         CloakBrowser 个人中心自动签到与运行时状态
+  browser_checkin_lease_service.ts   PostgreSQL 全局浏览器租约(跨 Deploy 实例串行)
 adapters/new_api_adapter.ts   对上游 new-api HTTP 的薄 fetch 封装
 db/client.ts     postgres 单例 getSql()(max:5, idle_timeout:20, connect_timeout:10;池被 cron 与 HTTP 共用)
 db/init.ts       启动时建表(见 Database)
 jobs/            5 个 cron 任务函数 + runner.ts(串行批处理器)
 lib/             auth、env、config(defaultSettings)、mask、request、response、sse、userscript、upstream_login_userscript、test_images
+scripts/         install_cloakbrowser.ts(构建期下载/冻结版本)、smoke_browser_checkin.ts(显式 opt-in 真实签到)
 types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端接口,islands 并不引用)、openai.ts
 ```
 
@@ -148,6 +165,9 @@ types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端
   与 `batch-unlink`(**两者都返回 501 notImplemented**)。**无 create POST、无
   DELETE**——上游模型由同步任务创建。
 - **settings**: `GET|PATCH /api/settings`
+- **checkin-automation**:`GET /api/checkin-automation/status`(返回已归一化的
+  `enabled`/`timeoutSeconds`、runtime 可用性/版本与全局租约 busy;不返回二进制
+  路径或许可证)
 - **logs**:
   `GET /api/request-logs`;`DELETE /api/request-logs`;`GET /api/system-task-logs`
 - **tasks**(全部 POST):
@@ -232,6 +252,71 @@ enabled=true)。高版本 listTokens 可能返回脱敏 `key`,不得直接使用
 `syncApiKeyModels` 拉取模型;`refreshAccount`
 内部会关闭该默认,避免账号创建/编辑后的完整刷新重复拉模型。
 
+## Browser-assisted check-in fallback
+
+`checkinAccount` 每次仍先用 adapter 直连 `POST /api/user/checkin`,transport
+timeout 为 15s。普通成功/「已签到」或业务失败完全不启动浏览器。只有两类可信信号
+进入 fallback:上游 JSON message 明确含
+Turnstile/Captcha/验证码/人机验证,或响应带 `cf-mitigated: challenge`;另兼容
+403/429/503 且同时有 Cloudflare 归属 header 与 challenge HTML marker。任意普通
+HTML/4xx/5xx 不得误触发高成本浏览器。
+
+fallback 每次从 `system_settings` 读取开关和 30–120s 总预算,因此保存后立即生效。
+开启时先争抢 PostgreSQL `browser_checkin_leases(name='global')`:最多等待
+`min(10s,总预算)`,拿到后租约初始 TTL 150s、每 20s heartbeat,并把已经等待的时间从
+浏览器预算扣除。全局租约让同一数据库上的多个 Deno Deploy 实例最多只运行一个
+CloakBrowser；拿不到租约时保持 `manual_required` + skipped,不排后台队列。
+
+`browser_checkin_service` 动态加载 server-external 的 CloakBrowser,固定
+`headless:true`、`humanize:true` + `humanPreset:'careful'`,在临时 persistent
+profile 内打开上游个人中心。执行前对 origin 格式及 A/AAAA 解析结果做 SSRF
+检查,把选定的公网地址用 Chromium `--host-resolver-rules` 固定到本次任务以避免
+DNS rebinding,并在 browser context 层只放行该 origin 与
+`https://challenges.cloudflare.com`;HTTP 与 WebSocket 分别由 `route` /
+`routeWebSocket` 执行同一 allowlist；目标站所有 document realm 在脚本执行前禁用
+WebSocket、Worker/SharedWorker、WebTransport 与 WebRTC(Cloudflare challenge
+origin 例外)。公网判定对 IPv6 采用 global-unicast allowlist 并排除 NAT64、6to4、
+文档/协议专用网段。service worker 与下载被禁用。Chromium 子进程环境采用
+allowlist(`Deno.Command` 探测额外使用 `clearEnv:true`),不会继承
+`AUTH_KEY`、`DATABASE_DSN` 等应用 secrets(仅按需透传 CloakBrowser
+license)。自动化与公开免登油猴脚本共用
+`buildUpstreamLoginRuntimeSource()`:PAT/userId/user 由 Playwright init-script
+放入页面内存 bootstrap,共享 runtime 同步取走后只保存在闭包中,**不会写入
+URL、sessionStorage 或 localStorage**。
+
+`CLOAKBROWSER_LICENSE_KEY` 在构建期显式传给 `ensureBinary(licenseKey)`,运行期
+显式传给 `launchPersistentContext({licenseKey})`。GitHub Free Key 因此会在构建时
+取得当时的 latest stable(单并发);未配置 key 才使用免许可证的 legacy v146。本地
+安装与浏览器运行都优先使用进程环境,未设置时才由 `lib/cloakbrowser_license.ts`
+从被 gitignore 的 `.env` 读取这一项；Deno Deploy/CI 没有 `.env`
+时继续使用平台注入的环境变量或无 key fallback。
+
+入口页处理完成后会新开一个专用自检 document:page-level init script
+在任何上游脚本 执行前捕获原生 fetch 并立即 `window.stop()`,再用该 fetch 完成
+logout 与带 PAT 的 `/api/user/self`;因此请求沿用同一个被 DNS pin 的 Chromium
+网络栈/CF Cookie,且 上游页面脚本没有机会覆写 fetch 或读取自检参数。
+
+执行器先处理站点入口 challenge。签到页候选依次为 `/profile`、
+`/console/personal`、`/console`,并兼容中英文签到按钮；完成
+Turnstile/签到后必须以 `GET /api/user/checkin` 的 `checked_in_today`
+确认结果。`finally` 总会关闭 context、删除临时 profile；外层编排停止 heartbeat
+并释放租约。总预算由外层 deadline race 强制约束,DNS/import/launch 卡住也能返回;
+context close 与 profile 删除另有短清理上限。SIGINT 会主动 abort/关闭所有活跃
+context 并释放当前进程持有的 PostgreSQL lease 后再退出,适配 Deno Deploy
+eviction。若 launch/close 超过二次清理上限,结果为 `cleanup_failed`:外层停止
+heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽；迟到的 workflow
+仍挂有最终 close/profile 删除回调。close 拒绝/超时会按该任务唯一的
+`--user-data-dir` 查找并 TERM→KILL 自己的 Chromium；无法确认退出时保留
+`activeRuns` 供 SIGINT 继续处理,避免立刻并发下一浏览器。SIGINT 先关闭浏览器,
+只有全部确认退出才删除 lease；否则仅停 heartbeat、由 TTL 隔离。
+
+一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
+日志。浏览器成功 → `checked`/success;功能关闭或租约 busy →
+`manual_required`/skipped;浏览器已经启动但超时、UI 不兼容或内部失败 →
+`manual_required`/failed。返回值额外带 `checkinMethod:'direct'|'browser'`
+与脱敏的 `automation:{attempted,code,durationMs}`;
+PAT、fragment、二进制路径和许可证不得进入 API 或日志。
+
 ## AI SDK test path(services/upstream_model_test_service.ts)
 
 `testUpstreamModel(id, kind)` 经 Vercel AI SDK **直连上游 origin**(不走
@@ -245,10 +330,11 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
 
 ## Database
 
-- **建表**:`db/init.ts` 启动时执行——对 8
-  张表(sites、accounts、api_keys、models、upstream_models、
-  request_logs、system_task_logs、system_settings)`create table if not exists`;另建
-  2 个唯一索引 (`sites_origin_key`、`accounts(site_id,user_id)`),包在 try/catch
+- **建表**:`db/init.ts` 启动时执行——对 9
+  张表(sites、accounts、browser_checkin_leases、api_keys、models、
+  upstream_models、request_logs、system_task_logs、system_settings)
+  `create table if not exists`;另建 2 个唯一索引
+  (`sites_origin_key`、`accounts(site_id,user_id)`),包在 try/catch
   里(有重复数据时告警并继续);
   以及**唯一的一处列回填**:`alter table upstream_models add column if not exists endpoint_type ...`。
   (“无 migration”成立,但确有一处列回填。)
@@ -277,6 +363,10 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
 - `system_task_logs.task_type`: site_health_check | account_checkin |
   account_quota_sync | account_api_key_sync | api_key_model_sync |
   request_log_flush | request_log_cleanup;`status`: success | failed | skipped
+- `browser_checkin_leases`:以固定主键 `name='global'` 保存 owner 与
+  `expires_at`,用于多个 Deno Deploy
+  实例之间原子争抢唯一浏览器执行槽；过期租约可被新执行者接管,运行中由 heartbeat
+  延期,结束时仅 owner 可释放。
 
 ### Entity relationships
 
@@ -308,9 +398,10 @@ jobs/)——`POST /api/tasks/account-api-key-sync` 对**所有**账号(无 enabl
 
 `jobs/runner.ts` 的 `runForIds` **严格串行**地遍历 id,逐个
 await,捕获单个错误计为 failed (不中断整批),返回
-`{total,success,failed,skipped,results}`。account_checkin 用自定义 classify 把
-`checkinStatus==='manual_required'` 归为 skipped。**system_task_logs 由 service
-层写,不是 runner。**
+`{total,success,failed,skipped,results}`。account_checkin 用自定义 classify:
+`manual_required` 且浏览器未启动(功能关闭/全局租约繁忙)计为
+skipped,浏览器已启动但失败计为 failed。**system_task_logs 由 service 层写,不是
+runner。**
 
 **账号刷新编排**:`POST /api/accounts` 与 `PATCH /api/accounts/:id` 在
 upsert/更新后
@@ -320,7 +411,7 @@ accounts/api_keys 不冲突),待 ApiKey 就绪再并发对每个 key
 `syncApiKeyModels`(模型依赖 key 先存在)。各子步骤 best-effort(自身 try/catch、写
 system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 
-## System settings(lib/config.ts `defaultSettings` —— 10 个键)
+## System settings(lib/config.ts `defaultSettings` —— 12 个键)
 
 | 键                                   | 默认     | 谁读取                                        |
 | ------------------------------------ | -------- | --------------------------------------------- |
@@ -329,10 +420,16 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 | `request_log_flush_interval_minutes` | `"0"`    | **死配置 —— 无任何读取方**                    |
 | `upstream_header_timeout_seconds`    | `"60"`   | 代理 + 测试服务                               |
 | `channel_retry_count`                | `"0"`    | 代理                                          |
+| `browser_checkin_enabled`            | `"true"` | 签到 challenge 是否启用 CloakBrowser fallback |
+| `browser_checkin_timeout_seconds`    | `"120"`  | 浏览器签到总时限(服务端归一化到 30–120 秒)    |
 | 5 个 `cron_*`                        | (见上表) | 启动时被 cron 读取                            |
 
 `updateSettings` 只持久化 `defaultSettings`
-中已存在的键(未知键静默丢弃);`getSettings` 把 DB 行 叠加在默认值之上。
+中已存在的键(未知键静默丢弃);`getSettings` 把 DB 行叠加在默认值之上。
+`browser_checkin_enabled` 仅精确字符串 `"true"` 归一化为开启,其它值均为
+`"false"`; timeout 用 `parseInt` 后 clamp 到 30–120,空值/非法值回默认
+120。两项在读历史 DB 值和写入时都会归一化,故运行时与 Settings UI
+一致,并在每次签到时读取、立即生效。
 
 ## Frontend
 
@@ -355,9 +452,10 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
   与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
-  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」按钮成功后**仅在前端**追加
-  一次 best-effort `sync-quota` 刷额度——后端 `checkinAccount`(及
-  cron/批量任务)只 签到不刷额度,因该函数被批量共用。
+  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」请求执行期间按钮显示
+  「验证中…」;最终仍需人工处理时以黄色显示「需手动」。按钮签到成功后**仅在前端**
+  追加一次 best-effort `sync-quota` 刷额度——后端 `checkinAccount`(及
+  cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「快捷录入」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装油猴脚本
   (`lib/userscript.ts`)在 new-api 站点一键录入站点+账号。登录态解析遵循
   **旧版优先、新版兜底**:先读取 `localStorage.user` 并以 `/api/user/self` 验证旧
@@ -405,6 +503,9 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   时会立即删除免登状态并停用当前页补丁,避免 SPA 同页重新登录后仍误用旧
   PAT;退出统一导航旧版兼容路径 `/login`(新版会自行重定向到 `/sign-in`)。
 - **ModelsApp** 通道弹窗有一个真实代理往返测试(`POST /v1/chat/completions`)。
+- **SettingsApp** 的「浏览器自动签到」区可立即启停 fallback、设置 30–120 秒总
+  超时,并经 `GET /api/checkin-automation/status` 展示 CloakBrowser wrapper /
+  Chromium 版本与全局租约的忙闲状态；状态 API/UI 均不展示 binary path 或许可证。
 - **LogsApp(系统日志)**:关联对象分三列(站点/账号/APIKey),有值单元格是链接,跳
   `/upstream?site=&account=&key=`
   并带到该层为止的父级链供上游页逐级选中;反查补全 (key→账号→站点)在日志侧用
@@ -422,13 +523,37 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   鉴权顺序、401 fallback、Bearer 隔离、分页已录入判定、录入与取消覆盖。
 - `lib/upstream_login_userscript_test.ts`:覆盖免登脚本元数据与普通页面无副作用、
   fragment 两阶段启动、logout 与 `/self` 校验、sessionStorage/Storage shadow、
-  fetch/XHR 同源注入及外域隔离、新版 AuthBundle、禁止 PAT 轮换与退出清理。
+  fetch/XHR 同源注入及外域隔离、新版 AuthBundle、禁止 PAT 轮换与退出清理,以及
+  CloakBrowser memory-only bootstrap 不把凭据写入 URL/Storage。
 - `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
   HTTP(S) origin 校验与 fragment 凭据编码。
+- `services/checkin_classifier_test.ts`:覆盖直连成功/普通失败/明确 captcha
+  与可信 Cloudflare challenge 分类,以及浏览器开关/超时安全归一化。
+- `services/browser_checkin_lease_service_test.ts`:用内存 lease store +
+  注入时钟覆盖 busy 等待、heartbeat、owner-only release 和优雅退出释放。
+- `services/account_checkin_test.ts` + `jobs/account_checkin_job_test.ts`:覆盖
+  direct fast path、fallback 门禁、租约等待计入预算、浏览器成功/失败与批任务
+  success/failed/skipped 分类。
+- `services/settings_service_test.ts`:覆盖浏览器开关与 30–120s timeout 在 DB
+  读写边界的规范化规则。
+- `lib/browser_checkin_security_test.ts`:覆盖纯公网 HTTP(S) origin 门禁与常见
+  IPv4/IPv6 私网、NAT64/6to4、文档/保留地址拒绝。
+- `lib/cloakbrowser_license_test.ts`:覆盖 key 从 dotenv
+  的普通、export、单双引号与 inline comment 语法读取,且不输出/持久化真实
+  secret。
+- `services/browser_checkin_service_test.ts`:用 canary 覆盖错误脱敏,确保 PAT、
+  Bearer、URL 凭据和 Turnstile/Captcha token 不进入日志/API message,并验证
+  WebSocket 与 HTTP 使用相同 origin allowlist。
 
 运行 `deno test -A`。
 
 上游模型测试是运行时功能,不是自动化测试。
+
+`deno task cloak:smoke` 同样**不属于自动化测试**,会对真实账号执行签到并产生外部
+副作用。脚本默认拒绝运行,必须显式设置 `TTS_CLOAK_LIVE=1` 以及
+`TTS_CLOAK_LIVE_ORIGIN`、`TTS_CLOAK_LIVE_USER_ID`、
+`TTS_CLOAK_LIVE_ACCESS_TOKEN`;可选 `TTS_CLOAK_LIVE_TIMEOUT_SECONDS` 仍会 clamp
+到 30–120。不要在 CI 中运行或把这些临时凭据写入仓库/日志。
 
 ## Dead config(尚存)
 
@@ -445,6 +570,28 @@ Fresh
   `build.rollupOptions.external` 经 `isAiExternal`):`ai`/`@ai-sdk/*` 的传递依赖
   `@vercel/oidc` 是 CJS 具名导出,rollup 无法解析。 运行时由 Deno 经 import map +
   node_modules 解析这些裸导入。新增 AI SDK 依赖时同步这份清单。
+- **CloakBrowser / Playwright 也必须保持 server external**:`cloakbrowser`
+  需要原始包结构、Node 内建模块与独立 Chromium 二进制,`playwright-core`
+  负责运行时控制;`vite.config.ts` 的 `ssr.external` 与 `isBrowserExternal`
+  必须同步。依赖精确固定为 `cloakbrowser@0.5.10` / `playwright-core@1.62.1`,升级
+  wrapper 时必须重新实测 Cloudflare challenge、构建下载和 Deno Deploy 启动。
+  CloakBrowser 的声明依赖 Node 类型；本仓
+  `nodeModulesDir:"manual"`,故还需根级精确 `@types/node@26.0.1`,不能依赖上游
+  devDependency 被隐式安装。
+- `deno task build` 会先让 Vite 重建 `_fresh`,再执行
+  `cloak:install`;不要反转顺序或依赖 Vite 保留未知文件,必须保证最终上传的
+  `_fresh` 已包含浏览器。构建脚本强制在该次下载禁用自动更新,运行时 service
+  也默认 `CLOAKBROWSER_AUTO_UPDATE=false`；只有用户显式设置才
+  覆盖。安装脚本还会写入 `tuntunshu-install.json`,运行时据此把本次构建验证过的
+  binary 固定为 `CLOAKBROWSER_BINARY_PATH`,不会因 Production-only
+  license/version 在请求内冷下载另一个版本。要让 GitHub Free/Pro key
+  或版本选择影响构建产物, **必须把相同的 `CLOAKBROWSER_LICENSE_KEY` /
+  `CLOAKBROWSER_VERSION` 同时配置给 Deno Deploy Build 环境**；仅配 Production
+  不会替换已构建的 binary。
+- CloakBrowser 在 Linux 默认模拟 Windows；若运行环境没有完整 Windows font set,
+  启动时会警告字体指纹不一致并可能降低 challenge 通过率。不要仅用
+  `CLOAKBROWSER_SUPPRESS_FONT_WARNING` 隐藏问题；字体受授权约束,应由部署环境合法
+  提供并在目标站实测,当前仓库不捆绑微软字体。
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。
 - `GET /tuntunshu-login.user.js` 同样无鉴权,但源码只包含通用免登逻辑和自身

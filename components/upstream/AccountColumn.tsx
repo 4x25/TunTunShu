@@ -87,12 +87,16 @@ export function AccountColumn(
           ? rows.map((a) => {
             const q = Number(a.quota), u = Number(a.used_quota);
             const ciBusy = busy === "ci" + a.id;
+            const manualRequired = !ciBusy &&
+              a.checkin_status === "manual_required";
             const ciLabel = ciBusy
-              ? "签到中…"
+              ? "验证中…"
               : a.checkin_status === "checked"
               ? "已签到"
               : a.checkin_status === "failed"
               ? "签到失败"
+              : manualRequired
+              ? "需手动"
               : "签到";
             const ciTone: "ok" | "bad" | undefined =
               a.checkin_status === "checked"
@@ -125,7 +129,9 @@ export function AccountColumn(
                     disabled={ciBusy}
                     onClick={() => onCheckin(a)}
                   >
-                    {ciLabel}
+                    {manualRequired
+                      ? <span style="color:var(--warn)">{ciLabel}</span>
+                      : ciLabel}
                   </ActBtn>
                   <ActBtn
                     disabled={busy === "sk" + a.id}

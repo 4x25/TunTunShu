@@ -290,6 +290,7 @@ export default function UpstreamApp() {
           CHECKIN_MAP[r.checkinStatus ?? "unknown"]?.[1] ?? r.checkinStatus ??
             r.error ?? "?"
         }`;
+        if (r.checkinStatus !== "checked") return checkinMsg;
         const quota = await apiSend<{ ok?: boolean }>(
           "POST",
           `/accounts/${a.id}/sync-quota`,

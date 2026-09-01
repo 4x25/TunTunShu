@@ -64,6 +64,15 @@ export async function initializeDatabase() {
     create index if not exists accounts_site_id_id_idx
       on accounts (site_id, id desc)
   `;
+  // CloakBrowser 签到全局租约。owner + 过期时间允许多实例原子争抢并在崩溃后自愈。
+  await sql`
+    create table if not exists browser_checkin_leases (
+      name text primary key,
+      owner text not null,
+      expires_at timestamptz not null,
+      updated_at timestamptz not null default now()
+    )
+  `;
   await sql`
     create table if not exists api_keys (
       id bigserial primary key,

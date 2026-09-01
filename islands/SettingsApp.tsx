@@ -4,6 +4,18 @@ import { apiGet, apiSend } from "../components/admin_api.ts";
 
 type Settings = Record<string, string>;
 
+interface CheckinAutomationStatus {
+  enabled: boolean;
+  timeoutSeconds: number;
+  runtime: {
+    available: boolean;
+    wrapperVersion: string | null;
+    chromiumVersion: string | null;
+    error: string | null;
+  };
+  busy: boolean;
+}
+
 function Info({ tip }: { tip: string }) {
   return <span class="info" tabindex={0} data-tip={tip}>?</span>;
 }
@@ -67,12 +79,33 @@ export default function SettingsApp() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [automationStatus, setAutomationStatus] = useState<
+    CheckinAutomationStatus | null
+  >(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState("");
 
   useEffect(() => {
     apiGet<Settings>("/settings").then(setS).catch(() =>
       setErr("加载设置失败")
     );
+    void loadAutomationStatus();
   }, []);
+
+  async function loadAutomationStatus() {
+    setStatusLoading(true);
+    setStatusError("");
+    try {
+      setAutomationStatus(
+        await apiGet<CheckinAutomationStatus>("/checkin-automation/status"),
+      );
+    } catch {
+      setAutomationStatus(null);
+      setStatusError("运行状态获取失败");
+    } finally {
+      setStatusLoading(false);
+    }
+  }
 
   function set(key: string, value: string) {
     setS((prev) => prev ? { ...prev, [key]: value } : prev);
@@ -218,6 +251,87 @@ export default function SettingsApp() {
               value={s.channel_retry_count}
               onChange={(v) => set("channel_retry_count", v)}
             />
+          </div>
+        </div>
+      </section>
+
+      {/* 浏览器自动签到 */}
+      <section class="card card-pad set-group">
+        <h2>
+          浏览器自动签到<span class="gline"></span>
+        </h2>
+        <div class="set-grid">
+          <div class="set-item">
+            <span class="ilabel">
+              <Info tip="普通 API 签到提示 Cloudflare Turnstile 等人机验证时，自动使用 CloakBrowser 打开个人中心并完成验证。" />自动验证
+            </span>
+            <label class="switch" title="启用浏览器自动签到">
+              <input
+                type="checkbox"
+                checked={s.browser_checkin_enabled === "true"}
+                onChange={(e) =>
+                  set(
+                    "browser_checkin_enabled",
+                    (e.target as HTMLInputElement).checked ? "true" : "false",
+                  )}
+              />
+              <span class="track"></span>
+            </label>
+            <span class="hint">
+              关闭后需要人机验证的账号仍会标记为「需手动」。
+            </span>
+          </div>
+          <div class="set-item">
+            <span class="ilabel">
+              <Info tip="一次浏览器验证从启动到确认签到结果的总时限，范围 30–120 秒。" />验证超时（秒）
+            </span>
+            <Stepper
+              min={30}
+              max={120}
+              value={s.browser_checkin_timeout_seconds}
+              onChange={(v) => set("browser_checkin_timeout_seconds", v)}
+            />
+          </div>
+          <div class="set-item span2">
+            <span class="ilabel">
+              <Info tip="运行状态只检查构建中的 CloakBrowser 与全局执行租约，不会返回二进制路径或许可证。" />运行状态
+            </span>
+            <div class="kbar">
+              {statusLoading && !automationStatus
+                ? <span class="pill pill-mute">检测中…</span>
+                : automationStatus?.runtime.available
+                ? <span class="pill pill-ok">运行时可用</span>
+                : <span class="pill pill-bad">运行时不可用</span>}
+              {automationStatus && (
+                <span
+                  class={`pill ${
+                    automationStatus.busy ? "pill-warn" : "pill-mute"
+                  }`}
+                >
+                  {automationStatus.busy ? "正在验证" : "当前空闲"}
+                </span>
+              )}
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                disabled={statusLoading}
+                onClick={() => void loadAutomationStatus()}
+              >
+                {statusLoading ? "检测中…" : "刷新状态"}
+              </button>
+            </div>
+            {automationStatus?.runtime.available && (
+              <span class="hint mono">
+                CloakBrowser {automationStatus.runtime.wrapperVersion ?? "?"}
+                {" · Chromium "}
+                {automationStatus.runtime.chromiumVersion ?? "?"}
+              </span>
+            )}
+            {(statusError || automationStatus?.runtime.error) && (
+              <span class="hint" style="color:var(--bad)">
+                {statusError || automationStatus?.runtime.error}
+              </span>
+            )}
           </div>
         </div>
       </section>

@@ -17,10 +17,14 @@ export class NewApiAdapter {
     return await fetch(`${origin}/`);
   }
 
-  async checkin(auth: NewApiUserAuth): Promise<Response> {
+  async checkin(
+    auth: NewApiUserAuth,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return await fetch(`${auth.origin}/api/user/checkin`, {
       method: "POST",
       headers: this.userHeaders(auth),
+      signal,
     });
   }
 

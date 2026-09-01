@@ -1,4 +1,7 @@
-import { buildUpstreamLoginUserScript } from "./upstream_login_userscript.ts";
+import {
+  buildUpstreamAutomationInitScript,
+  buildUpstreamLoginUserScript,
+} from "./upstream_login_userscript.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -52,6 +55,7 @@ interface RouteResult {
 }
 
 interface HarnessOptions {
+  source?: string;
   hash?: string;
   storedSession?: unknown;
   logoutStatus?: number;
@@ -538,7 +542,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   sandbox.top = sandbox;
   sandbox.globalThis = sandbox;
 
-  const source = buildUpstreamLoginUserScript({
+  const source = options.source ?? buildUpstreamLoginUserScript({
     baseUrl: "https://tuntunshu.example",
   });
   const run = new Function(
@@ -1208,4 +1212,110 @@ Deno.test("upstream login userscript 浮条展示限制并清理退出状态", a
   assert(logout, "exit did not attempt logout");
   assertEquals(logout.credentials, "include", "exit logout omitted cookies");
   assert(!logout.headers.authorization, "exit logout leaked the PAT");
+});
+
+Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", async () => {
+  const source = buildUpstreamAutomationInitScript({
+    origin: ORIGIN,
+    accessToken: PAT,
+    userId: USER_ID,
+    user: USER,
+    tabNonce: "automation-nonce",
+    createdAt: 1_700_000_000_000,
+  });
+  const harness = createHarness({ source });
+  harness.sandbox.WebSocket = function () {};
+  harness.sandbox.Worker = function () {};
+  harness.sandbox.SharedWorker = function () {};
+  harness.sandbox.WebTransport = function () {};
+  harness.sandbox.RTCPeerConnection = function () {};
+  harness.sandbox.webkitRTCPeerConnection = function () {};
+
+  harness.execute();
+  await settle();
+
+  assertEquals(
+    harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
+    "1.0.0",
+    "automation runtime marker mismatch",
+  );
+  for (
+    const name of [
+      "WebSocket",
+      "Worker",
+      "SharedWorker",
+      "WebTransport",
+      "RTCPeerConnection",
+      "webkitRTCPeerConnection",
+    ]
+  ) {
+    assertEquals(
+      harness.sandbox[name],
+      undefined,
+      `automation left ${name} available`,
+    );
+  }
+  assertEquals(
+    harness.sessionStorage.peek(SESSION_KEY),
+    null,
+    "automation persisted an active session",
+  );
+  assertEquals(
+    harness.localStorage.peek("user"),
+    null,
+    "automation persisted the shadow user",
+  );
+  assertEquals(
+    harness.localStorage.peek("uid"),
+    null,
+    "automation persisted the shadow uid",
+  );
+  assert(
+    !String((harness.sandbox.location as { href?: string }).href ?? "")
+      .includes(
+        PAT,
+      ),
+    "automation put the PAT in the page URL",
+  );
+
+  const patchedFetch = harness.sandbox.fetch as typeof fetch;
+  const refresh = await patchedFetch("/api/user/auth/refresh");
+  const bundle = await refresh.json() as {
+    data?: { access_token?: string };
+  };
+  assertEquals(bundle.data?.access_token, PAT, "virtual refresh lost the PAT");
+  assertEquals(
+    harness.sessionStorage.peek(SESSION_KEY),
+    null,
+    "virtual refresh persisted automation credentials",
+  );
+  assertEquals(
+    harness.fetchCalls.at(-1)?.credentials,
+    "include",
+    "automation self refresh did not preserve Cloudflare cookies",
+  );
+  harness.localStorage.setItem("auth-cache", JSON.stringify({ token: PAT }));
+  harness.sessionStorage.setItem("session-cache", PAT);
+  assertEquals(
+    harness.localStorage.peek("auth-cache"),
+    null,
+    "page code persisted the automation PAT in localStorage",
+  );
+  assertEquals(
+    harness.sessionStorage.peek("session-cache"),
+    null,
+    "page code persisted the automation PAT in sessionStorage",
+  );
+
+  const persisted = JSON.stringify({
+    history: harness.historyCalls,
+    navigations: harness.navigations,
+    localUser: harness.localStorage.peek("user"),
+    localUid: harness.localStorage.peek("uid"),
+    session: harness.sessionStorage.peek(SESSION_KEY),
+  });
+  assert(
+    !persisted.includes(PAT),
+    "automation PAT leaked into persisted state",
+  );
 });
