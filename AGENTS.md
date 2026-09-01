@@ -286,7 +286,10 @@ URL、sessionStorage 或 localStorage**。
 
 `CLOAKBROWSER_LICENSE_KEY` 在构建期显式传给 `ensureBinary(licenseKey)`,运行期
 显式传给 `launchPersistentContext({licenseKey})`。GitHub Free Key 因此会在构建时
-取得当时的 latest stable(单并发);未配置 key 才使用免许可证的 legacy v146。
+取得当时的 latest stable(单并发);未配置 key 才使用免许可证的 legacy v146。本地
+安装与浏览器运行都优先使用进程环境,未设置时才由 `lib/cloakbrowser_license.ts`
+从被 gitignore 的 `.env` 读取这一项；Deno Deploy/CI 没有 `.env`
+时继续使用平台注入的环境变量或无 key fallback。
 
 入口页处理完成后会新开一个专用自检 document:page-level init script
 在任何上游脚本 执行前捕获原生 fetch 并立即 `window.stop()`,再用该 fetch 完成
@@ -535,6 +538,9 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   读写边界的规范化规则。
 - `lib/browser_checkin_security_test.ts`:覆盖纯公网 HTTP(S) origin 门禁与常见
   IPv4/IPv6 私网、NAT64/6to4、文档/保留地址拒绝。
+- `lib/cloakbrowser_license_test.ts`:覆盖 key 从 dotenv
+  的普通、export、单双引号与 inline comment 语法读取,且不输出/持久化真实
+  secret。
 - `services/browser_checkin_service_test.ts`:用 canary 覆盖错误脱敏,确保 PAT、
   Bearer、URL 凭据和 Turnstile/Captcha token 不进入日志/API message,并验证
   WebSocket 与 HTTP 使用相同 origin allowlist。

@@ -13,6 +13,7 @@ import {
   type UpstreamAutomationBootstrap,
 } from "../lib/upstream_login_userscript.ts";
 import { getTimezone } from "../lib/env.ts";
+import { resolveCloakBrowserLicenseKey } from "../lib/cloakbrowser_license.ts";
 import {
   abandonActiveBrowserCheckinLeases,
   releaseActiveBrowserCheckinLeases,
@@ -863,7 +864,7 @@ async function runBrowserWorkflow(
   }
   throwIfAborted(run.controller.signal);
 
-  const licenseKey = Deno.env.get("CLOAKBROWSER_LICENSE_KEY") || undefined;
+  const licenseKey = await resolveCloakBrowserLicenseKey();
   const pinnedAddress =
     resolvedOrigin.addresses.find((address) => !address.includes(":")) ??
       resolvedOrigin.addresses[0];
@@ -1007,13 +1008,14 @@ export async function runBrowserCheckin(
   input: BrowserCheckinInput,
 ): Promise<BrowserCheckinResult> {
   const startedAt = Date.now();
+  const licenseKey = await resolveCloakBrowserLicenseKey();
   const timeoutMs = Math.min(
     120_000,
     Math.max(1_000, Math.trunc(input.timeoutMs)),
   );
   const secrets = [
     input.accessToken,
-    Deno.env.get("CLOAKBROWSER_LICENSE_KEY") ?? "",
+    licenseKey ?? "",
   ];
   if (!input.accessToken || !/^[1-9][0-9]*$/.test(input.userId)) {
     return {
