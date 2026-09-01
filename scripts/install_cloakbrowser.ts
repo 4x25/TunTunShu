@@ -7,7 +7,9 @@ Deno.env.set("CLOAKBROWSER_CACHE_DIR", cacheDir);
 Deno.env.set("CLOAKBROWSER_AUTO_UPDATE", "false");
 
 const { binaryInfo, ensureBinary } = await import("cloakbrowser");
-const binaryPath = await ensureBinary();
+const licenseKey = Deno.env.get("CLOAKBROWSER_LICENSE_KEY")?.trim() ||
+  undefined;
+const binaryPath = await ensureBinary(licenseKey);
 const info = binaryInfo();
 const relativePath = relative(cacheDir, binaryPath);
 if (

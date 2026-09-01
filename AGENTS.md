@@ -85,16 +85,16 @@ read`。CI 只做质量门禁,**不负责部署**——部署仍由 Deno Deploy
 
 ## Environment
 
-| Env                        | 必填 | 默认             | 说明                                                             |
-| -------------------------- | ---- | ---------------- | ---------------------------------------------------------------- |
-| `AUTH_KEY`                 | 是   | —                | 管理登录口令 + 默认代理 Key;**首次调用 getAuthKey() 时**才抛错   |
-| `DATABASE_DSN`             | 是   | —                | PostgreSQL DSN;缺失时**启动即抛错**(initializeDatabase → getSql) |
-| `HOST`                     | 否   | `0.0.0.0`        | 监听地址                                                         |
-| `PORT`                     | 否   | `4025`           | 监听端口                                                         |
-| `TZ`                       | 否   | `Asia/Shanghai`  | 时区;**不影响 cron**——Deno.cron 一律按 UTC 解释                  |
-| `CLOAKBROWSER_LICENSE_KEY` | 否   | —                | GitHub Free Key 用 latest stable;未设时用免许可证 legacy v146    |
-| `CLOAKBROWSER_BINARY_PATH` | 否   | 构建内二进制     | 显式指定已有 Chromium 可执行文件,跳过内置下载路径                |
-| `CLOAKBROWSER_VERSION`     | 否   | wrapper 对应版本 | 固定完整 Chromium 版本号,供免费/付费版本复现或回滚               |
+| Env                        | 必填 | 默认             | 说明                                                                           |
+| -------------------------- | ---- | ---------------- | ------------------------------------------------------------------------------ |
+| `AUTH_KEY`                 | 是   | —                | 管理登录口令 + 默认代理 Key;**首次调用 getAuthKey() 时**才抛错                 |
+| `DATABASE_DSN`             | 是   | —                | PostgreSQL DSN;缺失时**启动即抛错**(initializeDatabase → getSql)               |
+| `HOST`                     | 否   | `0.0.0.0`        | 监听地址                                                                       |
+| `PORT`                     | 否   | `4025`           | 监听端口                                                                       |
+| `TZ`                       | 否   | `Asia/Shanghai`  | 时区;**不影响 cron**——Deno.cron 一律按 UTC 解释                                |
+| `CLOAKBROWSER_LICENSE_KEY` | 否   | —                | 作为 `licenseKey` 传给安装/启动;Free Key 用 latest stable,未设时用 legacy v146 |
+| `CLOAKBROWSER_BINARY_PATH` | 否   | 构建内二进制     | 显式指定已有 Chromium 可执行文件,跳过内置下载路径                              |
+| `CLOAKBROWSER_VERSION`     | 否   | wrapper 对应版本 | 固定完整 Chromium 版本号,供免费/付费版本复现或回滚                             |
 
 ## Entrypoint & Startup(main.ts)
 
@@ -283,6 +283,10 @@ license)。自动化与公开免登油猴脚本共用
 `buildUpstreamLoginRuntimeSource()`:PAT/userId/user 由 Playwright init-script
 放入页面内存 bootstrap,共享 runtime 同步取走后只保存在闭包中,**不会写入
 URL、sessionStorage 或 localStorage**。
+
+`CLOAKBROWSER_LICENSE_KEY` 在构建期显式传给 `ensureBinary(licenseKey)`,运行期
+显式传给 `launchPersistentContext({licenseKey})`。GitHub Free Key 因此会在构建时
+取得当时的 latest stable(单并发);未配置 key 才使用免许可证的 legacy v146。
 
 入口页处理完成后会新开一个专用自检 document:page-level init script
 在任何上游脚本 执行前捕获原生 fetch 并立即 `window.stop()`,再用该 fetch 完成
