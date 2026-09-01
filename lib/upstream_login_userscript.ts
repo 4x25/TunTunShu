@@ -47,7 +47,20 @@ function serializeAutomationBootstrap(
 export function buildUpstreamAutomationInitScript(
   bootstrap: UpstreamAutomationBootstrap,
 ): string {
-  return `if (globalThis.top === globalThis && location.origin === ${
+  return `if (location.hostname !== "challenges.cloudflare.com") {
+  ["WebSocket", "Worker", "SharedWorker", "WebTransport", "RTCPeerConnection",
+    "webkitRTCPeerConnection"].forEach(function (name) {
+    try {
+      Object.defineProperty(globalThis, name, {
+        configurable: true,
+        enumerable: false,
+        writable: false,
+        value: undefined
+      });
+    } catch (_) {}
+  });
+}
+if (globalThis.top === globalThis && location.origin === ${
     JSON.stringify(bootstrap.origin)
   }) {
   Object.defineProperty(globalThis, "__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__", {

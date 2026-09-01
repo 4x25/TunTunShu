@@ -101,6 +101,14 @@ export async function releaseActiveBrowserCheckinLeases(): Promise<void> {
   }));
 }
 
+/** Stop renewing active leases without deleting rows; PostgreSQL TTL quarantines them. */
+export function abandonActiveBrowserCheckinLeases(): void {
+  for (const [owner, active] of activeLeases) {
+    active.stopHeartbeat();
+    activeLeases.delete(owner);
+  }
+}
+
 /**
  * Acquire the single browser slot shared by all application instances.
  * Expired rows are taken over atomically in PostgreSQL. Tests can provide an

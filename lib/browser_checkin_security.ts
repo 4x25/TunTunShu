@@ -23,6 +23,44 @@ function ipv4InCidr(address: number, base: number, bits: number): boolean {
   return (address >>> shift) === (base >>> shift);
 }
 
+function ipv6Number(address: string): bigint | null {
+  let source = address.trim().toLowerCase();
+  if (!source || source.includes("%")) return null;
+  if (source.includes(".")) {
+    const match = source.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+    const ipv4 = match && ipv4Number(match[2]);
+    if (!match || ipv4 == null) return null;
+    source = `${match[1]}${(ipv4 >>> 16).toString(16)}:${
+      (ipv4 & 0xffff).toString(16)
+    }`;
+  }
+
+  const halves = source.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || missing < 0) return null;
+  const parts = halves.length === 2
+    ? [...left, ...Array(missing).fill("0"), ...right]
+    : left;
+  if (parts.length !== 8) return null;
+
+  let value = 0n;
+  for (const part of parts) {
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+    value = (value << 16n) | BigInt(Number.parseInt(part, 16));
+  }
+  return value;
+}
+
+function ipv6InCidr(address: bigint, base: string, bits: number): boolean {
+  const baseValue = ipv6Number(base);
+  if (baseValue == null) return false;
+  const shift = BigInt(128 - bits);
+  return (address >> shift) === (baseValue >> shift);
+}
+
 function isPrivateIpv4(address: string): boolean {
   const value = ipv4Number(address);
   if (value == null) return true;
@@ -53,27 +91,18 @@ export function isPrivateNetworkAddress(address: string): boolean {
   const kind = isIP(normalized);
   if (kind === 4) return isPrivateIpv4(normalized);
   if (kind !== 6) return true;
+  const value = ipv6Number(normalized);
+  if (value == null) return true;
 
-  const embeddedV4 = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/)?.[1];
-  if (embeddedV4) return isPrivateIpv4(embeddedV4);
-  const mappedHex = normalized.match(
-    /^(?:::|0:0:0:0:0:)(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/,
-  );
-  if (mappedHex) {
-    const high = Number.parseInt(mappedHex[1], 16);
-    const low = Number.parseInt(mappedHex[2], 16);
-    return isPrivateIpv4(
-      `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`,
-    );
-  }
-
-  if (normalized === "::" || normalized === "::1") return true;
-  if (/^(?:fc|fd)/.test(normalized)) return true;
-  if (/^fe[89ab]/.test(normalized)) return true;
-  if (/^ff/.test(normalized)) return true;
-  if (/^2001:db8(?:[:]|$)/.test(normalized)) return true;
-  if (/^2001:0(?:[:]|$)/.test(normalized)) return true;
-  return false;
+  // Only globally routable unicast (2000::/3) is eligible. Explicitly remove
+  // IETF special-purpose, documentation and transition ranges inside it.
+  if (!ipv6InCidr(value, "2000::", 3)) return true;
+  return [
+    ["2001::", 23],
+    ["2001:db8::", 32],
+    ["2002::", 16],
+    ["3fff::", 20],
+  ].some(([base, bits]) => ipv6InCidr(value, base as string, bits as number));
 }
 
 export function assertSafeBrowserOrigin(rawOrigin: string): string {

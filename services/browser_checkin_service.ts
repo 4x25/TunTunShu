@@ -13,12 +13,16 @@ import {
   type UpstreamAutomationBootstrap,
 } from "../lib/upstream_login_userscript.ts";
 import { getTimezone } from "../lib/env.ts";
-import { releaseActiveBrowserCheckinLeases } from "./browser_checkin_lease_service.ts";
+import {
+  abandonActiveBrowserCheckinLeases,
+  releaseActiveBrowserCheckinLeases,
+} from "./browser_checkin_lease_service.ts";
 
 const CLOAK_WRAPPER_VERSION = "0.5.10";
 const PROFILE_PATHS = ["/profile", "/console/personal", "/console"];
 const CHECKIN_PATH = "/api/user/checkin";
 const CHALLENGE_HOST = "challenges.cloudflare.com";
+const CLOAK_LICENSE_HOST = "cloakbrowser.dev";
 const VALIDATOR_NAME = "__TTS_UPSTREAM_AUTOMATION_VALIDATE__";
 
 export type BrowserCheckinCode =
@@ -72,6 +76,9 @@ interface ActiveRun {
   controller: AbortController;
   context: BrowserContext | null;
   closePromise: Promise<void> | null;
+  workflow: Promise<BrowserCheckinResult> | null;
+  workflowSettled: boolean;
+  profileDir: string;
 }
 
 class BrowserFlowError extends Error {
@@ -103,6 +110,25 @@ export function redactBrowserCheckinText(
     )
     .replace(/(https?:\/\/)[^/@\s]+@/gi, "$1[redacted]@")
     .slice(0, 500);
+}
+
+export function isAllowedBrowserWebSocket(
+  rawUrl: string,
+  allowedOrigins: ReadonlySet<string>,
+): boolean {
+  try {
+    const target = new URL(rawUrl);
+    const httpProtocol = target.protocol === "wss:"
+      ? "https:"
+      : target.protocol === "ws:"
+      ? "http:"
+      : "";
+    if (!httpProtocol) return false;
+    assertSafeBrowserHostname(target.hostname);
+    return allowedOrigins.has(`${httpProtocol}//${target.host}`);
+  } catch {
+    return false;
+  }
 }
 
 async function configureCloakEnvironment(): Promise<void> {
@@ -161,6 +187,7 @@ async function inspectRuntimeBinary(
       args: ["--version", "--no-startup-window"],
       stdout: "piped",
       stderr: "null",
+      clearEnv: true,
       env: childProcessEnvironment(),
       signal: AbortSignal.timeout(Math.max(1, Math.min(5_000, timeoutMs))),
     }).output();
@@ -213,10 +240,11 @@ function installSignalListener(): void {
   try {
     Deno.addSignalListener("SIGINT", () => {
       const forcedExit = setTimeout(() => Deno.exit(0), 4_500);
-      void Promise.allSettled([
-        closeActiveBrowserCheckins(),
-        releaseActiveBrowserCheckinLeases(),
-      ]).finally(() => {
+      void (async () => {
+        const closed = await closeActiveBrowserCheckins();
+        if (closed) await releaseActiveBrowserCheckinLeases();
+        else abandonActiveBrowserCheckinLeases();
+      })().finally(() => {
         clearTimeout(forcedExit);
         Deno.exit(0);
       });
@@ -226,15 +254,13 @@ function installSignalListener(): void {
   }
 }
 
-export async function closeActiveBrowserCheckins(): Promise<void> {
+export async function closeActiveBrowserCheckins(): Promise<boolean> {
   const closing = [...activeRuns].map(async (run) => {
     run.controller.abort();
-    if (run.context) {
-      run.closePromise ??= run.context.close();
-      await settlesWithin(run.closePromise, 3_500);
-    }
+    return (await finishRunCleanup(run, run.profileDir)).clean;
   });
-  await Promise.allSettled(closing);
+  const results = await Promise.all(closing);
+  return results.every(Boolean);
 }
 
 function remainingMs(
@@ -297,6 +323,116 @@ async function removeTemporaryProfile(path: string): Promise<boolean> {
   }
 }
 
+async function profileBrowserPids(
+  profileDir: string,
+): Promise<number[] | null> {
+  if (!profileDir) return null;
+  try {
+    const output = await new Deno.Command("/bin/ps", {
+      args: ["-eo", "pid=,args="],
+      stdout: "piped",
+      stderr: "null",
+      clearEnv: true,
+      signal: AbortSignal.timeout(2_000),
+    }).output();
+    if (!output.success) return null;
+    const marker = `--user-data-dir=${profileDir}`;
+    return new TextDecoder().decode(output.stdout).split("\n").flatMap(
+      (line) => {
+        if (!line.includes(marker)) return [];
+        const pid = Number.parseInt(line.trim().split(/\s+/, 1)[0], 10);
+        return Number.isSafeInteger(pid) && pid > 1 ? [pid] : [];
+      },
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function terminateProfileBrowser(profileDir: string): Promise<boolean> {
+  let pids = await profileBrowserPids(profileDir);
+  if (pids == null) return false;
+  for (const pid of pids) {
+    try {
+      Deno.kill(pid, "SIGTERM");
+    } catch { /* process already exited */ }
+  }
+  if (pids.length) await new Promise((resolve) => setTimeout(resolve, 500));
+  pids = await profileBrowserPids(profileDir);
+  if (pids == null) return false;
+  for (const pid of pids) {
+    try {
+      Deno.kill(pid, "SIGKILL");
+    } catch { /* process already exited */ }
+  }
+  if (pids.length) await new Promise((resolve) => setTimeout(resolve, 200));
+  const remaining = await profileBrowserPids(profileDir);
+  return remaining !== null && remaining.length === 0;
+}
+
+async function finishRunCleanup(
+  run: ActiveRun,
+  profileDir: string,
+): Promise<{ clean: boolean; forced: boolean }> {
+  let forced = false;
+  const closeCurrentContext = async () => {
+    if (!run.context) return true;
+    run.closePromise ??= run.context.close();
+    const closeStatus = await settlesWithin(run.closePromise, 4_000);
+    if (closeStatus === "fulfilled") {
+      run.context = null;
+      return true;
+    }
+    forced = true;
+    if (!await terminateProfileBrowser(profileDir)) {
+      if (closeStatus === "rejected") run.closePromise = null;
+      return false;
+    }
+    run.context = null;
+    run.closePromise = null;
+    return true;
+  };
+
+  if (run.workflow && !run.workflowSettled && !run.context) {
+    const workflowStatus = await settlesWithin(run.workflow, 2_000);
+    if (workflowStatus === "timeout") {
+      forced = true;
+      await terminateProfileBrowser(profileDir);
+      return { clean: false, forced };
+    }
+    run.workflowSettled = true;
+  }
+  if (!await closeCurrentContext()) return { clean: false, forced };
+
+  if (run.workflow && !run.workflowSettled) {
+    const workflowStatus = await settlesWithin(run.workflow, 2_000);
+    if (workflowStatus === "timeout") {
+      forced = true;
+      await terminateProfileBrowser(profileDir);
+      return { clean: false, forced };
+    }
+    run.workflowSettled = true;
+    // A late launch can publish its context immediately before settling.
+    if (!await closeCurrentContext()) return { clean: false, forced };
+  }
+  if (profileDir && !await removeTemporaryProfile(profileDir)) {
+    return { clean: false, forced: true };
+  }
+  run.context = null;
+  activeRuns.delete(run);
+  return { clean: true, forced };
+}
+
+async function retryLateCleanup(run: ActiveRun, profileDir: string) {
+  const deadline = Date.now() + 145_000;
+  while (Date.now() < deadline) {
+    if ((await finishRunCleanup(run, profileDir)).clean) return;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  // Keep the run registered for SIGINT if even process-specific termination
+  // could not confirm cleanup. The database lease remains quarantined by TTL.
+}
+
 function childProcessEnvironment(): Record<string, string> {
   const source = Deno.env.toObject();
   const allowed = [
@@ -318,6 +454,20 @@ function childProcessEnvironment(): Record<string, string> {
     if (source[key]) result[key] = source[key];
   }
   return result;
+}
+
+function buildEgressLockdownInitScript(): string {
+  return `(function () {
+  if (location.hostname === ${JSON.stringify(CHALLENGE_HOST)}) return;
+  ["WebSocket", "Worker", "SharedWorker", "WebTransport", "RTCPeerConnection",
+    "webkitRTCPeerConnection"].forEach(function (name) {
+    try {
+      Object.defineProperty(globalThis, name, {
+        configurable: true, enumerable: false, writable: false, value: undefined
+      });
+    } catch (_) {}
+  });
+})();`;
 }
 
 function buildValidationInitScript(origin: string): string {
@@ -728,8 +878,8 @@ async function runBrowserWorkflow(
     locale: "zh-CN",
     timezone: getTimezone(),
     viewport: { width: 1440, height: 1000 },
-    args: resolvedOrigin.hostname === pinnedAddress ? [] : [
-      `--host-resolver-rules=MAP ${resolvedOrigin.hostname} ${resolverTarget}`,
+    args: [
+      `--host-resolver-rules=MAP ${resolvedOrigin.hostname} ${resolverTarget},EXCLUDE ${CHALLENGE_HOST},EXCLUDE ${CLOAK_LICENSE_HOST},MAP * ~NOTFOUND`,
     ],
     licenseKey,
     contextOptions: {
@@ -749,6 +899,7 @@ async function runBrowserWorkflow(
     );
   });
   throwIfAborted(run.controller.signal);
+  await run.context.addInitScript({ content: buildEgressLockdownInitScript() });
 
   const allowedOrigins = new Set([origin, `https://${CHALLENGE_HOST}`]);
   await run.context.route("**/*", async (route) => {
@@ -766,6 +917,21 @@ async function runBrowserWorkflow(
       await route.continue();
     } catch {
       await route.abort("blockedbyclient").catch(() => undefined);
+    }
+  });
+  await run.context.routeWebSocket(/.*/, async (webSocket) => {
+    try {
+      if (!isAllowedBrowserWebSocket(webSocket.url(), allowedOrigins)) {
+        await webSocket.close({
+          code: 1008,
+          reason: "blocked by egress policy",
+        });
+        return;
+      }
+      webSocket.connectToServer();
+    } catch {
+      await webSocket.close({ code: 1008, reason: "blocked by egress policy" })
+        .catch(() => undefined);
     }
   });
 
@@ -863,6 +1029,9 @@ export async function runBrowserCheckin(
     controller: new AbortController(),
     context: null,
     closePromise: null,
+    workflow: null,
+    workflowSettled: false,
+    profileDir: "",
   };
   activeRuns.add(run);
   let profileDir = "";
@@ -874,12 +1043,17 @@ export async function runBrowserCheckin(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     profileDir = await Deno.makeTempDir({ prefix: "tts-cloak-checkin-" });
+    run.profileDir = profileDir;
     workflow = runBrowserWorkflow(
       input,
       run,
       startedAt + timeoutMs,
       profileDir,
     );
+    run.workflow = workflow;
+    void workflow.finally(() => {
+      run.workflowSettled = true;
+    }).catch(() => undefined);
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
@@ -914,38 +1088,16 @@ export async function runBrowserCheckin(
       if (await settlesWithin(workflow, 3_000) === "timeout") {
         lateCleanup = true;
         cleanupFailed = true;
-        void workflow.finally(async () => {
-          run.controller.abort();
-          if (run.context) {
-            run.closePromise ??= run.context.close();
-            await settlesWithin(run.closePromise, 4_000);
-          }
-          if (profileDir) await removeTemporaryProfile(profileDir);
-          run.context = null;
-          activeRuns.delete(run);
-        }).catch(() => undefined);
-      }
-    }
-    if (!lateCleanup && run.context) {
-      run.closePromise ??= run.context.close();
-      if (await settlesWithin(run.closePromise, 4_000) === "timeout") {
-        lateCleanup = true;
-        cleanupFailed = true;
-        void run.closePromise.finally(async () => {
-          if (profileDir) await removeTemporaryProfile(profileDir);
-          run.context = null;
-          activeRuns.delete(run);
-        }).catch(() => undefined);
+        void retryLateCleanup(run, profileDir).catch(() => undefined);
       }
     }
     if (!lateCleanup) {
-      run.context = null;
-      activeRuns.delete(run);
-    }
-    if (!lateCleanup && profileDir) {
-      if (!await removeTemporaryProfile(profileDir)) {
-        cleanupFailed = true;
+      const cleanup = await finishRunCleanup(run, profileDir);
+      if (!cleanup.clean) {
+        lateCleanup = true;
+        void retryLateCleanup(run, profileDir).catch(() => undefined);
       }
+      cleanupFailed ||= !cleanup.clean || cleanup.forced;
     }
   }
   if (cleanupFailed) {

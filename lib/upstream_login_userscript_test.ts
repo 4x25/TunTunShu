@@ -1224,6 +1224,12 @@ Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", asyn
     createdAt: 1_700_000_000_000,
   });
   const harness = createHarness({ source });
+  harness.sandbox.WebSocket = function () {};
+  harness.sandbox.Worker = function () {};
+  harness.sandbox.SharedWorker = function () {};
+  harness.sandbox.WebTransport = function () {};
+  harness.sandbox.RTCPeerConnection = function () {};
+  harness.sandbox.webkitRTCPeerConnection = function () {};
 
   harness.execute();
   await settle();
@@ -1233,6 +1239,22 @@ Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", asyn
     "1.0.0",
     "automation runtime marker mismatch",
   );
+  for (
+    const name of [
+      "WebSocket",
+      "Worker",
+      "SharedWorker",
+      "WebTransport",
+      "RTCPeerConnection",
+      "webkitRTCPeerConnection",
+    ]
+  ) {
+    assertEquals(
+      harness.sandbox[name],
+      undefined,
+      `automation left ${name} available`,
+    );
+  }
   assertEquals(
     harness.sessionStorage.peek(SESSION_KEY),
     null,

@@ -1,4 +1,5 @@
 import {
+  abandonActiveBrowserCheckinLeases,
   acquireBrowserCheckinLease,
   type BrowserCheckinLeaseStore,
   releaseActiveBrowserCheckinLeases,
@@ -117,4 +118,23 @@ Deno.test("browser lease graceful shutdown releases active owners", async () => 
     ["owner-shutdown"],
     "graceful shutdown released owners",
   );
+});
+
+Deno.test("uncertain browser shutdown leaves the database lease to expire", async () => {
+  const store = new FakeStore(1);
+  let heartbeatStopped = false;
+  const result = await acquireBrowserCheckinLease(
+    { maxWaitMs: 0 },
+    {
+      store,
+      makeOwner: () => "owner-quarantine",
+      setInterval: () => 12,
+      clearInterval: () => heartbeatStopped = true,
+    },
+  );
+  assert(result.acquired, "lease should be acquired");
+  result.startHeartbeat();
+  abandonActiveBrowserCheckinLeases();
+  assert(heartbeatStopped, "quarantine did not stop heartbeat");
+  assertEquals(store.released, [], "quarantine deleted the database lease");
 });

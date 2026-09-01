@@ -62,7 +62,13 @@ Deno.test("browser check-in blocks private and reserved IPv4/IPv6 forms", () => 
       "ff02::1",
       "::ffff:127.0.0.1",
       "::ffff:7f00:1",
+      "64:ff9b::a9fe:a9fe",
+      "64:ff9b:1::a9fe:a9fe",
+      "100::1",
+      "2001:2::1",
       "2001:db8::1",
+      "2002:7f00:1::1",
+      "3fff::1",
     ]
   ) {
     assert(
@@ -74,5 +80,9 @@ Deno.test("browser check-in blocks private and reserved IPv4/IPv6 forms", () => 
   assert(
     !isPrivateNetworkAddress("2606:4700:4700::1111"),
     "public IPv6 was blocked",
+  );
+  assert(
+    !isPrivateNetworkAddress("2001:4860:4860::8888"),
+    "public 2001 IPv6 was blocked",
   );
 });

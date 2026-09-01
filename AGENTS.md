@@ -272,9 +272,14 @@ CloakBrowser；拿不到租约时保持 `manual_required` + skipped,不排后台
 profile 内打开上游个人中心。执行前对 origin 格式及 A/AAAA 解析结果做 SSRF
 检查,把选定的公网地址用 Chromium `--host-resolver-rules` 固定到本次任务以避免
 DNS rebinding,并在 browser context 层只放行该 origin 与
-`https://challenges.cloudflare.com`;service worker 与下载被禁用。Chromium
-子进程环境采用 allowlist,不会继承 `AUTH_KEY`、`DATABASE_DSN` 等应用
-secrets(仅按需透传 CloakBrowser license)。自动化与公开免登油猴脚本共用
+`https://challenges.cloudflare.com`;HTTP 与 WebSocket 分别由 `route` /
+`routeWebSocket` 执行同一 allowlist；目标站所有 document realm 在脚本执行前禁用
+WebSocket、Worker/SharedWorker、WebTransport 与 WebRTC(Cloudflare challenge
+origin 例外)。公网判定对 IPv6 采用 global-unicast allowlist 并排除 NAT64、6to4、
+文档/协议专用网段。service worker 与下载被禁用。Chromium 子进程环境采用
+allowlist(`Deno.Command` 探测额外使用 `clearEnv:true`),不会继承
+`AUTH_KEY`、`DATABASE_DSN` 等应用 secrets(仅按需透传 CloakBrowser
+license)。自动化与公开免登油猴脚本共用
 `buildUpstreamLoginRuntimeSource()`:PAT/userId/user 由 Playwright init-script
 放入页面内存 bootstrap,共享 runtime 同步取走后只保存在闭包中,**不会写入
 URL、sessionStorage 或 localStorage**。
@@ -293,7 +298,10 @@ context close 与 profile 删除另有短清理上限。SIGINT 会主动 abort/�
 context 并释放当前进程持有的 PostgreSQL lease 后再退出,适配 Deno Deploy
 eviction。若 launch/close 超过二次清理上限,结果为 `cleanup_failed`:外层停止
 heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽；迟到的 workflow
-仍挂有最终 close/profile 删除回调,避免未确认退出时立刻并发下一浏览器。
+仍挂有最终 close/profile 删除回调。close 拒绝/超时会按该任务唯一的
+`--user-data-dir` 查找并 TERM→KILL 自己的 Chromium；无法确认退出时保留
+`activeRuns` 供 SIGINT 继续处理,避免立刻并发下一浏览器。SIGINT 先关闭浏览器,
+只有全部确认退出才删除 lease；否则仅停 heartbeat、由 TTL 隔离。
 
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
 日志。浏览器成功 → `checked`/success;功能关闭或租约 busy →
@@ -522,9 +530,10 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `services/settings_service_test.ts`:覆盖浏览器开关与 30–120s timeout 在 DB
   读写边界的规范化规则。
 - `lib/browser_checkin_security_test.ts`:覆盖纯公网 HTTP(S) origin 门禁与常见
-  IPv4/IPv6 私网、保留地址拒绝。
+  IPv4/IPv6 私网、NAT64/6to4、文档/保留地址拒绝。
 - `services/browser_checkin_service_test.ts`:用 canary 覆盖错误脱敏,确保 PAT、
-  Bearer、URL 凭据和 Turnstile/Captcha token 不进入日志/API message。
+  Bearer、URL 凭据和 Turnstile/Captcha token 不进入日志/API message,并验证
+  WebSocket 与 HTTP 使用相同 origin allowlist。
 
 运行 `deno test -A`。
 
