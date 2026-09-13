@@ -5,7 +5,7 @@ import { buildUpstreamLoginUserScript } from "./lib/upstream_login_userscript.ts
 import { buildUserScript } from "./lib/userscript.ts";
 import { getSettings } from "./services/settings_service.ts";
 import { runAccountCheckinJob } from "./jobs/account_checkin_job.ts";
-import { runAccountQuotaSyncJob } from "./jobs/account_quota_sync_job.ts";
+import { runAccountDataSyncJob } from "./jobs/account_quota_sync_job.ts";
 import { runApiKeyModelSyncJob } from "./jobs/api_key_model_sync_job.ts";
 import { runRequestLogCleanupJob } from "./jobs/request_log_cleanup_job.ts";
 import { runSiteHealthCheckJob } from "./jobs/site_health_check_job.ts";
@@ -69,7 +69,7 @@ if (typeof Deno.cron === "function") {
       settings.cron_account_quota_sync,
       async () => {
         try {
-          await runAccountQuotaSyncJob();
+          await runAccountDataSyncJob();
         } catch (error) {
           console.error("cron account_quota_sync failed:", error);
         }
