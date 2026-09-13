@@ -141,9 +141,10 @@ export async function syncApiKeyModels(id: number) {
     const data = await response.json().catch(() => ({})) as {
       data?: Array<{ id?: string }>;
     };
-    const names = (Array.isArray(data.data) ? data.data : []).map((item) =>
-      item.id
-    ).filter((name): name is string => Boolean(name));
+    const modelList = Array.isArray(data.data) ? data.data : [];
+    const names = modelList.map((item) => item.id).filter((
+      name,
+    ): name is string => Boolean(name));
     const logId = await createSystemTaskLog({
       taskType: "api_key_model_sync",
       status: response.ok ? "success" : "failed",
@@ -157,7 +158,6 @@ export async function syncApiKeyModels(id: number) {
       return { ok: false, status: response.status, data };
     }
     await sql`update api_keys set status = 'healthy', updated_at = now() where id = ${id}`;
-    await sql`update upstream_models set status = 'invalid', last_sync_log_id = ${logId}, updated_at = now() where api_key_id = ${id}`;
     for (const name of names) {
       const existing = await sql<{ id: number }[]>`
         select id from upstream_models where api_key_id = ${id} and name = ${name} limit 1
@@ -172,6 +172,22 @@ export async function syncApiKeyModels(id: number) {
         await sql`
           insert into upstream_models (api_key_id, name, status, last_sync_log_id)
           values (${id}, ${name}, 'healthy', ${logId})
+        `;
+      }
+    }
+    // 上游已下架的模型：仅当响应体确实携带模型列表时才同步删除，
+    // 避免上游返回畸形 body（ok 但无 data 数组）时误清全部记录。
+    if (Array.isArray(data.data)) {
+      const removed = await sql<{ id: number }[]>`
+        delete from upstream_models
+        where api_key_id = ${id} and name != all(${names})
+        returning id
+      `;
+      if (removed.length > 0) {
+        await sql`
+          update system_task_logs
+          set message = ${`models=${names.length} removed=${removed.length}`}
+          where id = ${logId}
         `;
       }
     }
