@@ -128,6 +128,11 @@ export async function initializeDatabase() {
     alter table sites
     add column if not exists status_data jsonb
   `;
+  // user_data 为后加列:缓存账号数据同步时拉到的 new-api /api/user/self data 响应体。
+  await sql`
+    alter table accounts
+    add column if not exists user_data jsonb
+  `;
   await sql`
     create table if not exists request_logs (
       id bigserial primary key,

@@ -33,9 +33,13 @@ export class NewApiAdapter {
     });
   }
 
-  async getCheckinStatus(auth: NewApiUserAuth): Promise<Response> {
+  async getCheckinStatus(
+    auth: NewApiUserAuth,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return await fetch(`${auth.origin}/api/user/checkin`, {
       headers: this.userHeaders(auth),
+      signal,
     });
   }
 

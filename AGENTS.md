@@ -369,7 +369,9 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   标志性字段时落库的 `/api/status` data 负载缓存, 判为 down
   时清空(见下「站点健康检查判定」)。
 - `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
-  unknown | checked | unchecked | manual_required | failed
+  unknown | checked | unchecked | manual_required | failed;`accounts.user_data`
+  (jsonb,可空):账号数据同步时落库的 `/api/user/self` data 负载缓存(脱敏 DTO,
+  失败时清空)。
 - `api_keys.status`: unknown | healthy | invalid | quota_empty
 - `upstream_models.status`: unknown | healthy | invalid(**无
   'down'**);`endpoint_type`: 上述 4 种;`model_id` **可为 null**(未映射)
@@ -406,6 +408,17 @@ try/catch)。schedule 在启动时经 `getSettings()` **一次性**读取——*
 
 注意 `api_key_model_sync`(cron 名)↔ `cron_model_sync`(设置键)的命名不一致。
 
+**账号数据同步判定**(原「额度同步」;service 函数为 `syncAccountData`,但 cron/
+任务类型/路由/设置键仍沿用 `account_quota_sync` 命名,避免破坏存量日志与设置):
+与「自动识别账号名」共用 `GET /api/user/self`——刷新 quota/used_quota 与
+`accounts.status`(成功且 quota>0 → healthy;quota=0 → quota_empty;业务失败/网络
+异常 → invalid),并把整个 data 负载(上游脱敏 DTO)缓存到 `accounts.user_data`,
+失败时清空。self 成功后 best-effort 调 `GET /api/user/checkin`,按 new-api 前端
+同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
+true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
+`failed`);功能未启用/上游 success:false/字段缺失/请求失败时不动本地签到状态,
+日志 message 追加 `checked_in_today=true|false|na`。
+
 **站点健康检查判定**(`healthCheckSite`,cron 与手动端点共用):请求
 `GET <origin>/api/status`(10s 超时),判定 healthy 需同时满足 HTTP 2xx、
 `body.success === true`、且 data 通过 new-api 标志性字段识别
@@ -428,7 +441,7 @@ runner。**
 **账号刷新编排**:`POST /api/accounts` 与 `PATCH /api/accounts/:id` 在
 upsert/更新后
 `void refreshAccount(id)`(fire-and-forget,接口立即返回;编排在后端而非前端)。
-`refreshAccount` 先并发 `syncAccountQuota` ‖ `syncAccountApiKeys`(分写
+`refreshAccount` 先并发 `syncAccountData` ‖ `syncAccountApiKeys`(分写
 accounts/api_keys 不冲突),待 ApiKey 就绪再并发对每个 key
 `syncApiKeyModels`(模型依赖 key 先存在)。各子步骤 best-effort(自身 try/catch、写
 system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
