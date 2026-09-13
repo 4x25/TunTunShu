@@ -8,6 +8,7 @@ import {
   CHECKIN_MAP,
   ENDPOINT_LABELS,
   hit,
+  STATUS_MAP,
 } from "../components/upstream/constants.ts";
 import { useDebouncedValue } from "../components/upstream/list_state.ts";
 import { NewModelModal } from "../components/upstream/NewModelModal.tsx";
@@ -299,30 +300,45 @@ export default function UpstreamApp() {
       },
       "account",
     );
-  const syncKeys = (a: Account) =>
+  const checkAccount = (a: Account) =>
     act(
-      "sk" + a.id,
+      "ac" + a.id,
       async () => {
         const r = await apiSend<{
           ok?: boolean;
-          count?: number;
-          newKeys?: number;
-          modelSyncs?: Array<{ ok?: boolean; count?: number } | null>;
-          error?: string;
+          data?: {
+            ok?: boolean;
+            quota?: string;
+            usedQuota?: string;
+            status?: string;
+            checkinStatus?: string | null;
+          } | null;
+          keys?: {
+            ok?: boolean;
+            count?: number;
+            newKeys?: number;
+            pruned?: number;
+            error?: string;
+          } | null;
         }>(
           "POST",
-          `/accounts/${a.id}/sync-api-keys`,
+          `/accounts/${a.id}/sync`,
         );
-        if (r.ok === false) throw new Error(r.error ?? "拉Key失败");
-        const modelSyncs = r.modelSyncs ?? [];
-        const modelCount = modelSyncs.reduce(
-          (sum, item) => sum + (item?.count ?? 0),
-          0,
-        );
-        const newPart = (r.newKeys ?? 0) > 0
-          ? `，新增 ${r.newKeys} 个，已自动拉取 ${modelSyncs.length} 个 Key 的模型(${modelCount} 个)`
-          : "";
-        return `「${a.name}」发现 ${r.count ?? 0} 个 APIKey${newPart}`;
+        const dataPart = r.data?.ok === true
+          ? `账号正常${
+            r.data.status
+              ? `(${STATUS_MAP[r.data.status] ?? r.data.status})`
+              : ""
+          }`
+          : "账号数据同步失败";
+        const keysPart = r.keys?.ok === true
+          ? `发现 ${r.keys.count ?? 0} 个 Key${
+            (r.keys.newKeys ?? 0) > 0 ? `（新增 ${r.keys.newKeys}）` : ""
+          }${(r.keys.pruned ?? 0) > 0 ? `，清理 ${r.keys.pruned}` : ""}`
+          : `Key 同步失败${r.keys?.error ? `：${r.keys.error}` : ""}`;
+        const msg = `「${a.name}」检测：${dataPart} · ${keysPart}`;
+        if (r.ok === false) throw new Error(msg);
+        return msg;
       },
       "account",
     );
@@ -579,7 +595,7 @@ export default function UpstreamApp() {
           onToggle={toggleAcc}
           onLogin={loginUpstream}
           onCheckin={checkin}
-          onSyncKeys={syncKeys}
+          onCheck={checkAccount}
           onEdit={openEditAccount}
           onDelete={delAcc}
         />

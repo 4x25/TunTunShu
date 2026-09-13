@@ -26,7 +26,7 @@ export function AccountColumn(
     onToggle,
     onLogin,
     onCheckin,
-    onSyncKeys,
+    onCheck,
     onEdit,
     onDelete,
   }: {
@@ -44,7 +44,7 @@ export function AccountColumn(
     onToggle: (account: Account) => void;
     onLogin: (account: Account) => void;
     onCheckin: (account: Account) => void;
-    onSyncKeys: (account: Account) => void;
+    onCheck: (account: Account) => void;
     onEdit: (account: Account) => void;
     onDelete: (account: Account) => void;
   },
@@ -139,6 +139,12 @@ export function AccountColumn(
                   {usd(a.quota).toFixed(2)}
                 </RowSub>
                 <RowActions>
+                  <ActBtn
+                    disabled={busy === "ac" + a.id}
+                    onClick={() => onCheck(a)}
+                  >
+                    {busy === "ac" + a.id ? "检测中…" : "检测"}
+                  </ActBtn>
                   <ActBtn onClick={() => onLogin(a)}>登录</ActBtn>
                   <ActBtn
                     tone={ciTone}
@@ -149,12 +155,6 @@ export function AccountColumn(
                     {manualRequired
                       ? <span style="color:var(--warn)">{ciLabel}</span>
                       : ciLabel}
-                  </ActBtn>
-                  <ActBtn
-                    disabled={busy === "sk" + a.id}
-                    onClick={() => onSyncKeys(a)}
-                  >
-                    {busy === "sk" + a.id ? "拉取中…" : "拉Key"}
                   </ActBtn>
                   <ActBtn onClick={() => onEdit(a)}>编辑</ActBtn>
                   <ActBtn danger onClick={() => onDelete(a)}>删除</ActBtn>
