@@ -60,8 +60,9 @@ deno test -A       # 全部自动化测试
 `deno task check`,失败即把输出反馈回来;纯问答/纯文档 轮次跳过。它不替代上面的
 `deno install` 与 `deno task dev`。
 
-**PR 后必做 code review**:创建 PR 后,**派一个干净上下文的子代理**对改动做 code
-review——子代理不偏袒作者写的代码,能更中立地挑出问题;再据其反馈修订。
+**推送前必做 code review**:改动**直接提交到 master**(不走 PR)——推送前用干净视角
+自查一遍完整 diff(不偏袒作者视角,中立地挑出问题),再据反馈修订后推送; CI 与 Deno
+Deploy 会在推送后自动把关。
 
 ## Deploy
 
