@@ -154,7 +154,9 @@ types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端
 - **sites**:
   `GET|POST /api/sites`;`GET|PATCH|DELETE /api/sites/:id`;`POST /api/sites/:id/health-check`;`POST /api/sites/probe-name`
 - **accounts**:
-  `GET|POST /api/accounts`;`GET|PATCH|DELETE /api/accounts/:id`;`POST /api/accounts/:id/{checkin,sync-api-keys,sync-quota,probe-name}`;`POST /api/accounts/probe-name`
+  `GET|POST /api/accounts`;`GET|PATCH|DELETE /api/accounts/:id`;`POST /api/accounts/:id/{checkin,sync,sync-quota,probe-name}`;`POST /api/accounts/probe-name`。`POST /api/accounts/:id/sync`
+  为手动单账号数据同步(与 cron 同一编排 syncAccount:账号数据 ‖ 拉 Key);原
+  `sync-api-keys` 路由已移除(拉 Key 并入检测/cron)。
 - **api-keys**:
   `GET|POST /api/api-keys`;`GET|PATCH|DELETE /api/api-keys/:id`;`POST /api/api-keys/:id/sync-models`
 - **models**: `GET|POST /api/models`;`GET|PATCH|DELETE /api/models/:id`
@@ -412,10 +414,16 @@ try/catch)。schedule 在启动时经 `getSettings()` **一次性**读取——*
 
 **账号数据同步判定**(原「额度同步」;service 函数为 `syncAccountData`,但 cron/
 任务类型/路由/设置键仍沿用 `account_quota_sync` 命名,避免破坏存量日志与设置):
-与「自动识别账号名」共用 `GET /api/user/self`——刷新 quota/used_quota 与
-`accounts.status`(成功且 quota>0 → healthy;quota=0 → quota_empty;业务失败/网络
-异常 → invalid),并把整个 data 负载(上游脱敏 DTO)缓存到 `accounts.user_data`,
-失败时清空。self 成功后 best-effort 调 `GET /api/user/checkin`,按 new-api 前端
+cron `account_quota_sync`(jobs/account_quota_sync_job.ts 的
+`runAccountDataSyncJob`) 对每个启用账号执行 `syncAccount`(service
+层导出的单账号编排:并发 `syncAccountData` ‖ `syncAccountApiKeys`,仅对本轮新增
+Key 顺带拉模型,存量 Key 由 `api_key_model_sync` cron
+负责);手动入口为账号行「检测」按钮 (`POST /api/accounts/:id/sync`)与
+`POST /api/tasks/account-quota-sync`。数据同步部分 与「自动识别账号名」共用
+`GET /api/user/self`——刷新 quota/used_quota 与 `accounts.status`(成功且 quota>0
+→ healthy;quota=0 → quota_empty;业务失败/网络 异常 → invalid),并把整个 data
+负载(上游脱敏 DTO)缓存到 `accounts.user_data`, 失败时清空。self 成功后
+best-effort 调 `GET /api/user/checkin`,按 new-api 前端
 同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
 true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
 `failed`);功能未启用/上游 success:false/字段缺失/请求失败时不动本地签到状态,
@@ -433,9 +441,10 @@ email_verification 至少命中 2 项);不再用「非 404 且 <500」的纯状�
 命中时把整个 data 负载写入 `sites.status_data` 缓存,失败/异常时置 null 并标
 down。
 
-`account_api_key_sync` 是**手动专用**(无 cron,不在
-jobs/)——`POST /api/tasks/account-api-key-sync` 对**所有**账号(无 enabled 过滤)调
-`account_service.syncAccountApiKeys`。
+`account_api_key_sync` 任务类型**无独立 cron**(jobs/ 中无对应 job):自动拉 Key
+已并入 账号数据同步 cron(`syncAccount`
+编排);`POST /api/tasks/account-api-key-sync` 仍可 手动对**所有**账号(无 enabled
+过滤)调 `account_service.syncAccountApiKeys`。
 
 `jobs/runner.ts` 的 `runForIds` **严格串行**地遍历 id,逐个
 await,捕获单个错误计为 failed (不中断整批),返回
@@ -484,8 +493,9 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **UpstreamApp**:4 列 Miller 钻取(站点→账号→Key→模型)带每列搜索。选中项与各列
   搜索词以 URL query 为**唯一事实来源**(`use_url_state.ts`:首帧/SSR 为空以避免
   hydration mismatch,挂载后一帧补上);选中只由点击或 URL 显式触发,**无「候选恰剩
-  一项时自动选中」的隐式收敛**。行操作:站点 检测/编辑/删除,账号 签到/拉Key(新增
-  Key 后自动拉模型)/编辑/删除,Key 拉取模型/删除;启停经 PATCH。APIKey
+  一项时自动选中」的隐式收敛**。行操作:站点 检测/编辑/删除,账号 检测(首位,
+  `POST /api/accounts/:id/sync`,手动执行单账号数据同步:账号数据 ‖ 拉 Key,新增
+  Key 后自动拉模型)/签到/编辑/删除,Key 拉取模型/删除;启停经 PATCH。APIKey
   行的密钥密文右侧有复制按钮(`components/clipboard.ts`:优先
   `navigator.clipboard`,非安全上下文退回 `execCommand`
   选区兜底),复制的是列表接口原样返回的**完整明文 Key**(密文仅前端 `maskKey`

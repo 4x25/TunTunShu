@@ -670,6 +670,23 @@ export async function syncAccountApiKeys(
 }
 
 /**
+ * 单账号数据同步(账号数据 ‖ 拉 Key)——cron `account_quota_sync` 与手动「检测」
+ * 按钮共用。两者分写 accounts / api_keys+upstream_models,互不冲突;拉 Key 仅对
+ * 本轮新增 Key 顺带拉模型,存量 Key 由 `api_key_model_sync` cron 负责。
+ */
+export async function syncAccount(id: number) {
+  const [data, keys] = await Promise.all([
+    syncAccountData(id),
+    syncAccountApiKeys(id),
+  ]);
+  return {
+    ok: data?.ok === true && keys?.ok === true,
+    data,
+    keys,
+  };
+}
+
+/**
  * 创建/编辑账号后的完整刷新:(账号数据 ‖ 拉 ApiKey) → 账号下所有 Key 并发拉模型。
  * 唯一依赖:模型须在 ApiKey 就绪后才能拉。各子步骤自身 try/catch、不抛错并写
  * system_task_logs,故为 best-effort,Promise.all 不会 reject。

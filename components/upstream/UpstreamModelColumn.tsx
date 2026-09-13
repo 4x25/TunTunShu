@@ -219,7 +219,7 @@ export function UpstreamModelColumn(
             <div class="empty">
               {page.loading ? "加载中…" : page.error ??
                 (selectedKeyId != null
-                  ? "该 Key 下暂无模型，先在账号列「拉Key」再在此列「拉取模型」"
+                  ? "该 Key 下暂无模型，先在账号列「检测」再在此列「拉取模型」"
                   : "选择 APIKey 下钻，或浏览全部")}
             </div>
           )}
