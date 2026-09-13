@@ -170,8 +170,9 @@ types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端
   upsert——已存在则刷新为 `healthy` 并更新
   `last_sync_log_id`,新模型则插入;**上游已下架的模型直接从 `upstream_models`
   同步删除**(连同其 model_id 映射关系;`models` 统一模型行不受影响)。
-  仅当响应体确实携带 `data` 数组时才执行删除,防止畸形 body 误清;删除数会追加到
-  `api_key_model_sync` 日志的 message(`models=N removed=M`)。
+  仅当响应体确实携带 `data` 数组且条目全部解析出模型名(或列表为空)时才执行删除，
+  防止畸形 body 误清;删除数会追加到 `api_key_model_sync` 日志的
+  message(`models=N removed=M`)。
 - **settings**: `GET|PATCH /api/settings`
 - **checkin-automation**:`GET /api/checkin-automation/status`(返回已归一化的
   `enabled`/`timeoutSeconds`、runtime 可用性/版本与全局租约 busy;不返回二进制

@@ -175,9 +175,13 @@ export async function syncApiKeyModels(id: number) {
         `;
       }
     }
-    // 上游已下架的模型：仅当响应体确实携带模型列表时才同步删除，
-    // 避免上游返回畸形 body（ok 但无 data 数组）时误清全部记录。
-    if (Array.isArray(data.data)) {
+    // 上游已下架的模型：仅当响应体确实携带模型列表，且列表要么为空、要么每个
+    // 条目都解析出了模型名时才同步删除——避免畸形 body（ok 但无 data 数组、
+    // 或条目全部缺失 id）误清全部记录。
+    if (
+      Array.isArray(data.data) &&
+      (names.length > 0 || data.data.length === 0)
+    ) {
       const removed = await sql<{ id: number }[]>`
         delete from upstream_models
         where api_key_id = ${id} and name != all(${names})

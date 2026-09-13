@@ -558,7 +558,7 @@ export async function syncAccountData(id: number) {
       accountId: account.id,
       message,
     });
-    await sql`update accounts set status = 'invalid', last_quota_sync_log_id = ${logId}, updated_at = now() where id = ${id}`;
+    await sql`update accounts set status = 'invalid', user_data = null, last_quota_sync_log_id = ${logId}, updated_at = now() where id = ${id}`;
     return { ok: false, error: message };
   }
 }
