@@ -1,4 +1,5 @@
 import { IconSearch } from "../icons.tsx";
+import { CreateMenu } from "./CreateMenu.tsx";
 import { handleColumnScroll } from "./list_state.ts";
 import {
   ActBtn,
@@ -19,6 +20,7 @@ export function SiteColumn(
     onKeywordChange,
     onLoadMore,
     onCreate,
+    onBatch,
     onPick,
     onToggle,
     onHealthCheck,
@@ -33,6 +35,7 @@ export function SiteColumn(
     onKeywordChange: (value: string) => void;
     onLoadMore: () => void;
     onCreate: () => void;
+    onBatch: () => void;
     onPick: (id: string) => void;
     onToggle: (site: Site) => void;
     onHealthCheck: (site: Site) => void;
@@ -49,13 +52,15 @@ export function SiteColumn(
           {page.refreshing && rows.length > 0 && (
             <span class="meta faint">刷新中…</span>
           )}
-          <button
-            type="button"
-            class="btn btn-primary btn-sm add"
-            onClick={onCreate}
-          >
-            + 新建站点
-          </button>
+          <CreateMenu
+            id="site"
+            createLabel="+ 新建站点"
+            onCreate={onCreate}
+            busy={busy}
+            actions={[
+              { key: "health-check", label: "批量检测", onRun: onBatch },
+            ]}
+          />
         </div>
       </div>
       <div class="mcol-search">

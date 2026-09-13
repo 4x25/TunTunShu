@@ -14,3 +14,8 @@ vendor/
 # Deno 锁文件(本仓选择忽略,避免锁文件 churn;Deno Deploy 会自行重新解析依赖)
 deno.lock
 
+# 本地 agent skill 文档(npx skills add 安装,仅本机参考,不入仓)
+.agents/
+.claude/skills/
+skills-lock.json
+

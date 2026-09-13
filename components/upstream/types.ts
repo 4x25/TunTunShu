@@ -106,3 +106,11 @@ export type RefreshScope =
   | "key"
   | "um"
   | "models";
+
+/** /api/tasks/* 批量任务的返回汇总(jobs/runner.ts 的 JobSummary)。 */
+export interface JobSummary {
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+}

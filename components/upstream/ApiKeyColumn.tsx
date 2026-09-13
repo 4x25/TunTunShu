@@ -1,4 +1,5 @@
 import { IconSearch } from "../icons.tsx";
+import { CreateMenu } from "./CreateMenu.tsx";
 import { maskKey } from "./constants.ts";
 import { handleColumnScroll } from "./list_state.ts";
 import {
@@ -23,6 +24,7 @@ export function ApiKeyColumn(
     onKeywordChange,
     onLoadMore,
     onCreate,
+    onBatch,
     onPick,
     onToggle,
     onCopyKey,
@@ -39,6 +41,7 @@ export function ApiKeyColumn(
     onKeywordChange: (value: string) => void;
     onLoadMore: () => void;
     onCreate: () => void;
+    onBatch: () => void;
     onPick: (id: string) => void;
     onToggle: (key: ApiKey) => void;
     onCopyKey: (key: ApiKey) => void;
@@ -55,13 +58,15 @@ export function ApiKeyColumn(
           {page.refreshing && rows.length > 0 && (
             <span class="meta faint">刷新中…</span>
           )}
-          <button
-            type="button"
-            class="btn btn-primary btn-sm add"
-            onClick={onCreate}
-          >
-            + 新建 Key
-          </button>
+          <CreateMenu
+            id="key"
+            createLabel="+ 新建 Key"
+            onCreate={onCreate}
+            busy={busy}
+            actions={[
+              { key: "model-sync", label: "批量拉取模型", onRun: onBatch },
+            ]}
+          />
         </div>
       </div>
       <div class="mcol-search">

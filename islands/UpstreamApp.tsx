@@ -28,6 +28,7 @@ import type {
   Account,
   ApiKey,
   Flash,
+  JobSummary,
   RefreshScope,
   Selection,
   Site,
@@ -355,6 +356,60 @@ export default function UpstreamApp() {
       "key",
     );
 
+  function batchPart(name: string, r: JobSummary): string {
+    return `${name}：共 ${r.total} · 成功 ${r.success} · 失败 ${r.failed}${
+      r.skipped > 0 ? ` · 跳过 ${r.skipped}` : ""
+    }`;
+  }
+  const batchSiteCheck = () =>
+    act(
+      "batch-site",
+      async () => {
+        const r = await apiSend<JobSummary>(
+          "POST",
+          "/tasks/site-health-check",
+        );
+        return batchPart("批量检测站点", r);
+      },
+      "siteOnly",
+    );
+  const batchAccountRun = () =>
+    act(
+      "batch-account",
+      async () => {
+        const sync = await apiSend<JobSummary>(
+          "POST",
+          "/tasks/account-quota-sync",
+        );
+        let checkinPart: string;
+        try {
+          const ci = await apiSend<JobSummary>(
+            "POST",
+            "/tasks/account-checkin",
+          );
+          checkinPart = batchPart("批量签到", ci);
+        } catch (e) {
+          checkinPart = `批量签到：请求失败(${
+            e instanceof Error ? e.message : "error"
+          })`;
+        }
+        return `${batchPart("批量检测", sync)}；${checkinPart}`;
+      },
+      "account",
+    );
+  const batchKeySyncModels = () =>
+    act(
+      "batch-key",
+      async () => {
+        const r = await apiSend<JobSummary>(
+          "POST",
+          "/tasks/api-key-model-sync",
+        );
+        return batchPart("批量拉取模型", r);
+      },
+      "key",
+    );
+
   // 复制不改数据，故不走 act()（无需刷新列表）：成功后按钮短暂显示对勾
   async function copyKey(k: ApiKey) {
     try {
@@ -574,6 +629,7 @@ export default function UpstreamApp() {
           onKeywordChange={(value) => setU({ siteKeyword: value })}
           onLoadMore={() => void loadSites("append")}
           onCreate={() => openCreate("site")}
+          onBatch={batchSiteCheck}
           onPick={pickSite}
           onToggle={toggleSite}
           onHealthCheck={healthCheck}
@@ -591,6 +647,7 @@ export default function UpstreamApp() {
           onKeywordChange={(value) => setU({ accountKeyword: value })}
           onLoadMore={() => void loadAccounts("append")}
           onCreate={() => openCreate("account")}
+          onBatch={batchAccountRun}
           onPick={pickAccount}
           onToggle={toggleAcc}
           onLogin={loginUpstream}
@@ -610,6 +667,7 @@ export default function UpstreamApp() {
           onKeywordChange={(value) => setU({ keyKeyword: value })}
           onLoadMore={() => void loadKeys("append")}
           onCreate={() => openCreate("apikey")}
+          onBatch={batchKeySyncModels}
           onPick={pickKey}
           onToggle={toggleKey}
           onCopyKey={(k) => void copyKey(k)}

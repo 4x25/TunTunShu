@@ -494,7 +494,14 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **UpstreamApp**:4 列 Miller 钻取(站点→账号→Key→模型)带每列搜索。选中项与各列
   搜索词以 URL query 为**唯一事实来源**(`use_url_state.ts`:首帧/SSR 为空以避免
   hydration mismatch,挂载后一帧补上);选中只由点击或 URL 显式触发,**无「候选恰剩
-  一项时自动选中」的隐式收敛**。行操作:站点 检测/编辑/删除,账号 检测(首位,
+  一项时自动选中」的隐式收敛**。站点/账号/Key 三列标题栏的「+ 新建」按钮右侧带有
+  以 daisyUI `join` 合并的批量操作下拉(`CreateMenu.tsx`,daisyUI 5 Popover API
+  写法:`popovertarget`+`popover`+`anchor-name`,浏览器原生点击外部/Escape
+  关闭):站点「批量检测」(`POST /api/tasks/site-health-check`),账号「批量检测和
+  批量签到」(顺序执行 `account-quota-sync` + `account-checkin`
+  任务,签到失败不阻断
+  刷新),Key「批量拉取模型」(`POST /api/tasks/api-key-model-sync`);busy
+  期间下拉禁用 并显示 spinner。行操作:站点 检测/编辑/删除,账号 检测(首位,
   `POST /api/accounts/:id/sync`,手动执行单账号数据同步:账号数据 ‖ 拉 Key,新增
   Key 后自动拉模型)/签到/编辑/删除,Key 拉取模型/删除;启停经 PATCH。APIKey
   行的密钥密文右侧有复制按钮(`components/clipboard.ts`:优先

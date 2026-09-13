@@ -1,5 +1,6 @@
 import { IconSearch } from "../icons.tsx";
 import { usd } from "./constants.ts";
+import { CreateMenu } from "./CreateMenu.tsx";
 import { handleColumnScroll } from "./list_state.ts";
 import {
   ActBtn,
@@ -22,6 +23,7 @@ export function AccountColumn(
     onKeywordChange,
     onLoadMore,
     onCreate,
+    onBatch,
     onPick,
     onToggle,
     onLogin,
@@ -40,6 +42,7 @@ export function AccountColumn(
     onKeywordChange: (value: string) => void;
     onLoadMore: () => void;
     onCreate: () => void;
+    onBatch: () => void;
     onPick: (id: string) => void;
     onToggle: (account: Account) => void;
     onLogin: (account: Account) => void;
@@ -58,13 +61,19 @@ export function AccountColumn(
           {page.refreshing && rows.length > 0 && (
             <span class="meta faint">刷新中…</span>
           )}
-          <button
-            type="button"
-            class="btn btn-primary btn-sm add"
-            onClick={onCreate}
-          >
-            + 新建账号
-          </button>
+          <CreateMenu
+            id="account"
+            createLabel="+ 新建账号"
+            onCreate={onCreate}
+            busy={busy}
+            actions={[
+              {
+                key: "check-checkin",
+                label: "批量检测和批量签到",
+                onRun: onBatch,
+              },
+            ]}
+          />
         </div>
       </div>
       <div class="mcol-search">
