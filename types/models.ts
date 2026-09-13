@@ -17,6 +17,7 @@ export interface Site {
   origin: string;
   enabled: boolean;
   status: SiteStatus;
+  statusData: Record<string, unknown> | null;
   lastHealthCheckLogId: number | null;
   remark: string | null;
   createdAt: Date;

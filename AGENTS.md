@@ -243,7 +243,8 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
 - **API-Key 级**(仅 `Authorization: Bearer <apiKey>`——此 apiKey 是**上游 token**
   `api_keys.key`,**不是**本地代理 Key):getModels
   `GET /v1/models`、chatCompletions `POST /v1/chat/completions`。
-- healthCheck `GET /`(无鉴权头)。
+- getStatus `GET /api/status`(无鉴权头,带 Edge-like UA、redirect follow、可选
+  AbortSignal)。站点健康检查与「自动获取站点名称」(fetchSystemName)共用此接口。
 
 **new-api 约定**:token 无效时也回 HTTP 200,业务成败在 `body.success`。services
 一律用 `ok = response.ok && data.success === true` 判定。
@@ -344,8 +345,10 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   `create table if not exists`;另建 2 个唯一索引
   (`sites_origin_key`、`accounts(site_id,user_id)`),包在 try/catch
   里(有重复数据时告警并继续);
-  以及**唯一的一处列回填**:`alter table upstream_models add column if not exists endpoint_type ...`。
-  (“无 migration”成立,但确有一处列回填。)
+  以及两处列回填:`alter table upstream_models add column if not exists endpoint_type ...`
+  与
+  `alter table sites add column if not exists status_data jsonb`(健康检查时缓存的
+  new-api `/api/status` data 负载)。(“无 migration”成立,但有上述列回填。)
 - **无任何 FK 约束**——所有 `*_id` 是裸 `bigint`。级联删除在应用代码里自顶向下做
   (deleteSite → accounts → api_keys → upstream_models)。**例外:deleteModel
   是「解除映射」 (置 `upstream_models.model_id=null`)而非删除上游模型。**
@@ -361,7 +364,10 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
 
 ### Tables & status enums(types/enums.ts)
 
-- `sites.status`: unknown | healthy | down
+- `sites.status`: unknown | healthy |
+  down;`sites.status_data`(jsonb,可空):最近一次 健康检查命中 new-api
+  标志性字段时落库的 `/api/status` data 负载缓存, 判为 down
+  时清空(见下「站点健康检查判定」)。
 - `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
   unknown | checked | unchecked | manual_required | failed
 - `api_keys.status`: unknown | healthy | invalid | quota_empty
@@ -399,6 +405,14 @@ try/catch)。schedule 在启动时经 `getSettings()` **一次性**读取——*
 | request_log_cleanup | `cron_request_log_cleanup` | `30 3 * * *`      | `POST /api/tasks/request-log-cleanup` |
 
 注意 `api_key_model_sync`(cron 名)↔ `cron_model_sync`(设置键)的命名不一致。
+
+**站点健康检查判定**(`healthCheckSite`,cron 与手动端点共用):请求
+`GET <origin>/api/status`(10s 超时),判定 healthy 需同时满足 HTTP 2xx、
+`body.success === true`、且 data 通过 new-api 标志性字段识别
+(`isNewApiStatusData`:version/start_time/system_name/quota_per_unit/
+email_verification 至少命中 2 项);不再用「非 404 且 <500」的纯状态码判定。
+命中时把整个 data 负载写入 `sites.status_data` 缓存,失败/异常时置 null 并标
+down。
 
 `account_api_key_sync` 是**手动专用**(无 cron,不在
 jobs/)——`POST /api/tasks/account-api-key-sync` 对**所有**账号(无 enabled 过滤)调

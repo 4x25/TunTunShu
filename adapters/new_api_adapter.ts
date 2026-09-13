@@ -13,8 +13,13 @@ const NEW_API_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0";
 
 export class NewApiAdapter {
-  async healthCheck(origin: string): Promise<Response> {
-    return await fetch(`${origin}/`);
+  /** 无鉴权:GET /api/status,返回 new-api 公开状态(含 success/data 包裹)。 */
+  async getStatus(origin: string, signal?: AbortSignal): Promise<Response> {
+    return await fetch(`${origin.replace(/\/+$/, "")}/api/status`, {
+      headers: { "User-Agent": NEW_API_USER_AGENT },
+      signal,
+      redirect: "follow",
+    });
   }
 
   async checkin(
