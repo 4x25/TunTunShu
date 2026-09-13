@@ -123,6 +123,22 @@ export async function initializeDatabase() {
     alter table upstream_models
     add column if not exists endpoint_type text not null default 'openai_chat'
   `;
+  // status_data 为后加列:缓存站点健康检查时拉到的 new-api /api/status data 响应体。
+  await sql`
+    alter table sites
+    add column if not exists status_data jsonb
+  `;
+  // user_data 为后加列:缓存账号数据同步时拉到的 new-api /api/user/self data 响应体。
+  await sql`
+    alter table accounts
+    add column if not exists user_data jsonb
+  `;
+  // checkin_date/checkin_quota 为后加列:缓存今日签到记录(日期与收获额度)。
+  await sql`
+    alter table accounts
+    add column if not exists checkin_date text,
+    add column if not exists checkin_quota bigint
+  `;
   await sql`
     create table if not exists request_logs (
       id bigserial primary key,

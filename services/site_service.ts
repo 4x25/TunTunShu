@@ -13,14 +13,33 @@ function hostOf(origin: string): string {
   }
 }
 
+/** new-api `/api/status` 响应中 data 的公开负载;结构随上游版本浮动,仅作缓存透传。 */
+export type NewApiStatusData = Record<string, unknown>;
+
+/**
+ * new-api 项目标志性字段(见上游 controller/misc.go GetStatus)。
+ * 要求至少命中两项,避免任意返回 200 的页面被误判为 new-api 站点。
+ */
+const NEW_API_SIGNATURE_KEYS = [
+  "version",
+  "start_time",
+  "system_name",
+  "quota_per_unit",
+  "email_verification",
+] as const;
+
+export function isNewApiStatusData(data: unknown): data is NewApiStatusData {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return false;
+  }
+  const hits = NEW_API_SIGNATURE_KEYS.filter((key) => key in data).length;
+  return hits >= 2;
+}
+
 /** 请求 origin 的 /api/status,取 new-api 站点名称(data.system_name);失败返回 null。 */
 export async function fetchSystemName(origin: string): Promise<string | null> {
   try {
-    const res = await fetch(`${origin.replace(/\/+$/, "")}/api/status`, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; TunTunShu/1.0)" },
-      signal: AbortSignal.timeout(8000),
-      redirect: "follow",
-    });
+    const res = await adapter.getStatus(origin, AbortSignal.timeout(8000));
     if (!res.ok) return null;
     const body = await res.json().catch(() => null) as
       | { data?: { system_name?: unknown } }
@@ -180,6 +199,12 @@ export async function updateSite(
   return { id, name, origin, enabled, remark };
 }
 
+/**
+ * 站点健康检查:GET <origin>/api/status(与「自动获取站点名称」同一接口)。
+ * 判定healthy 不只看 HTTP 200,还要求 new-api 约定的 `{success:true, data:{...}}`
+ * 包裹并通过标志性字段识别(见 isNewApiStatusData);命中时把整个 data
+ * 负载落库到 sites.status_data 作为缓存,供后续流程使用,失败时清空。
+ */
 export async function healthCheckSite(id: number) {
   const sql = getSql();
   const rows = await sql<{ id: number; origin: string }[]>`
@@ -188,21 +213,36 @@ export async function healthCheckSite(id: number) {
   const site = rows[0];
   if (!site) return null;
   try {
-    const response = await adapter.healthCheck(site.origin);
-    const healthy = response.status !== 404 && response.status < 500;
-    const status = healthy ? "healthy" : "down";
+    const response = await adapter.getStatus(
+      site.origin,
+      AbortSignal.timeout(10_000),
+    );
+    const body = await response.json().catch(() => null) as
+      | { success?: unknown; data?: unknown }
+      | null;
+    const data = body?.data;
+    const isHealthy = response.ok && body?.success === true &&
+      isNewApiStatusData(data);
+    const status = isHealthy ? "healthy" : "down";
     const logId = await createSystemTaskLog({
       taskType: "site_health_check",
-      status: healthy ? "success" : "failed",
+      status: isHealthy ? "success" : "failed",
       siteId: id,
-      message: `http_status=${response.status}`,
+      message: `http_status=${response.status} new_api=${isHealthy}`,
     });
     await sql`
       update sites
-      set status = ${status}, last_health_check_log_id = ${logId}, updated_at = now()
+      set status = ${status},
+          status_data = ${isHealthy ? JSON.stringify(data) : null}::jsonb,
+          last_health_check_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
-    return { ok: healthy, httpStatus: response.status, status };
+    return {
+      ok: isHealthy,
+      httpStatus: response.status,
+      newApi: isHealthy,
+      status,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const logId = await createSystemTaskLog({
@@ -213,7 +253,7 @@ export async function healthCheckSite(id: number) {
     });
     await sql`
       update sites
-      set status = 'down', last_health_check_log_id = ${logId}, updated_at = now()
+      set status = 'down', status_data = null, last_health_check_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
     return { ok: false, error: message, status: "down" };

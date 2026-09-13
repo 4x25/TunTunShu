@@ -164,6 +164,15 @@ types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端
   解除映射、`endpointType`);`POST /api/upstream-models/:id/test`;`POST /api/upstream-models/batch-link`
   与 `batch-unlink`(**两者都返回 501 notImplemented**)。**无 create POST、无
   DELETE**——上游模型由同步任务创建。
+- **模型同步差异处理**(`services/api_key_service.ts` 的 `syncApiKeyModels`,cron
+  `api_key_model_sync` 与手动 `POST /api/api-keys/:id/sync-models`
+  共用):拉取上游 `GET /v1/models` 后,按 `(api_key_id, name)`
+  upsert——已存在则刷新为 `healthy` 并更新
+  `last_sync_log_id`,新模型则插入;**上游已下架的模型直接从 `upstream_models`
+  同步删除**(连同其 model_id 映射关系;`models` 统一模型行不受影响)。
+  仅当响应体确实携带 `data` 数组且条目全部解析出模型名(或列表为空)时才执行删除，
+  防止畸形 body 误清;删除数会追加到 `api_key_model_sync` 日志的
+  message(`models=N removed=M`)。
 - **settings**: `GET|PATCH /api/settings`
 - **checkin-automation**:`GET /api/checkin-automation/status`(返回已归一化的
   `enabled`/`timeoutSeconds`、runtime 可用性/版本与全局租约 busy;不返回二进制
@@ -235,7 +244,8 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
 - **API-Key 级**(仅 `Authorization: Bearer <apiKey>`——此 apiKey 是**上游 token**
   `api_keys.key`,**不是**本地代理 Key):getModels
   `GET /v1/models`、chatCompletions `POST /v1/chat/completions`。
-- healthCheck `GET /`(无鉴权头)。
+- getStatus `GET /api/status`(无鉴权头,带 Edge-like UA、redirect follow、可选
+  AbortSignal)。站点健康检查与「自动获取站点名称」(fetchSystemName)共用此接口。
 
 **new-api 约定**:token 无效时也回 HTTP 200,业务成败在 `body.success`。services
 一律用 `ok = response.ok && data.success === true` 判定。
@@ -336,8 +346,10 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   `create table if not exists`;另建 2 个唯一索引
   (`sites_origin_key`、`accounts(site_id,user_id)`),包在 try/catch
   里(有重复数据时告警并继续);
-  以及**唯一的一处列回填**:`alter table upstream_models add column if not exists endpoint_type ...`。
-  (“无 migration”成立,但确有一处列回填。)
+  以及两处列回填:`alter table upstream_models add column if not exists endpoint_type ...`
+  与
+  `alter table sites add column if not exists status_data jsonb`(健康检查时缓存的
+  new-api `/api/status` data 负载)。(“无 migration”成立,但有上述列回填。)
 - **无任何 FK 约束**——所有 `*_id` 是裸 `bigint`。级联删除在应用代码里自顶向下做
   (deleteSite → accounts → api_keys → upstream_models)。**例外:deleteModel
   是「解除映射」 (置 `upstream_models.model_id=null`)而非删除上游模型。**
@@ -353,9 +365,15 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
 
 ### Tables & status enums(types/enums.ts)
 
-- `sites.status`: unknown | healthy | down
+- `sites.status`: unknown | healthy |
+  down;`sites.status_data`(jsonb,可空):最近一次 健康检查命中 new-api
+  标志性字段时落库的 `/api/status` data 负载缓存, 判为 down
+  时清空(见下「站点健康检查判定」)。
 - `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
-  unknown | checked | unchecked | manual_required | failed
+  unknown | checked | unchecked | manual_required | failed;`accounts.user_data`
+  (jsonb,可空):账号数据同步时落库的 `/api/user/self` data 负载缓存(脱敏 DTO,
+  失败时清空);`checkin_date`/`checkin_quota`(可空):今日签到记录缓存 (来自
+  /api/user/checkin 的 stats.records,未签到时清空)。
 - `api_keys.status`: unknown | healthy | invalid | quota_empty
 - `upstream_models.status`: unknown | healthy | invalid(**无
   'down'**);`endpoint_type`: 上述 4 种;`model_id` **可为 null**(未映射)
@@ -392,6 +410,29 @@ try/catch)。schedule 在启动时经 `getSettings()` **一次性**读取——*
 
 注意 `api_key_model_sync`(cron 名)↔ `cron_model_sync`(设置键)的命名不一致。
 
+**账号数据同步判定**(原「额度同步」;service 函数为 `syncAccountData`,但 cron/
+任务类型/路由/设置键仍沿用 `account_quota_sync` 命名,避免破坏存量日志与设置):
+与「自动识别账号名」共用 `GET /api/user/self`——刷新 quota/used_quota 与
+`accounts.status`(成功且 quota>0 → healthy;quota=0 → quota_empty;业务失败/网络
+异常 → invalid),并把整个 data 负载(上游脱敏 DTO)缓存到 `accounts.user_data`,
+失败时清空。self 成功后 best-effort 调 `GET /api/user/checkin`,按 new-api 前端
+同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
+true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
+`failed`);功能未启用/上游 success:false/字段缺失/请求失败时不动本地签到状态,
+日志 message 追加 `checked_in_today=true|false|na`。已签到时还会把今日记录
+(records 中最大 checkin_date 那条的 `checkin_date`/`quota_awarded`)写入
+`accounts.checkin_date/checkin_quota`,未签到时清空;`checkinAccount` 签到成功后
+同样 best-effort 回拉今日记录落库。账号列表额外透出 `site_checkin_enabled`(来自
+`sites.status_data.checkin_enabled`,null=未知)供 前端签到按钮门禁。
+
+**站点健康检查判定**(`healthCheckSite`,cron 与手动端点共用):请求
+`GET <origin>/api/status`(10s 超时),判定 healthy 需同时满足 HTTP 2xx、
+`body.success === true`、且 data 通过 new-api 标志性字段识别
+(`isNewApiStatusData`:version/start_time/system_name/quota_per_unit/
+email_verification 至少命中 2 项);不再用「非 404 且 <500」的纯状态码判定。
+命中时把整个 data 负载写入 `sites.status_data` 缓存,失败/异常时置 null 并标
+down。
+
 `account_api_key_sync` 是**手动专用**(无 cron,不在
 jobs/)——`POST /api/tasks/account-api-key-sync` 对**所有**账号(无 enabled 过滤)调
 `account_service.syncAccountApiKeys`。
@@ -406,7 +447,7 @@ runner。**
 **账号刷新编排**:`POST /api/accounts` 与 `PATCH /api/accounts/:id` 在
 upsert/更新后
 `void refreshAccount(id)`(fire-and-forget,接口立即返回;编排在后端而非前端)。
-`refreshAccount` 先并发 `syncAccountQuota` ‖ `syncAccountApiKeys`(分写
+`refreshAccount` 先并发 `syncAccountData` ‖ `syncAccountApiKeys`(分写
 accounts/api_keys 不冲突),待 ApiKey 就绪再并发对每个 key
 `syncApiKeyModels`(模型依赖 key 先存在)。各子步骤 best-effort(自身 try/catch、写
 system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
@@ -452,10 +493,15 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
   与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
-  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」请求执行期间按钮显示
-  「验证中…」;最终仍需人工处理时以黄色显示「需手动」。按钮签到成功后**仅在前端**
-  追加一次 best-effort `sync-quota` 刷额度——后端 `checkinAccount`(及
-  cron/批量任务)只签到不刷额度,因该函数被批量共用。
+  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」按钮有四种状态:
+  ①站点未开放签到(`site_checkin_enabled === false`,来自站点 status_data)→
+  置灰禁用 + not-allowed 光标 + hover tip「站点未开放签到功能」;②可签到
+  (checkin_status 为 unchecked/unknown)→ 正常可点击「签到」;③已签到 →
+  绿色「已签到」+ hover tip 展示签到日期与收获额度(取 accounts.checkin_date/
+  checkin_quota);④自动签到已执行但有误(manual_required/failed)→ 黄色
+  「需手动」/红色「签到失败」。请求执行期间按钮显示「验证中…」。按钮签到成功后
+  **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
+  `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「快捷录入」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装油猴脚本
   (`lib/userscript.ts`)在 new-api 站点一键录入站点+账号。登录态解析遵循
   **旧版优先、新版兜底**:先读取 `localStorage.user` 并以 `/api/user/self` 验证旧

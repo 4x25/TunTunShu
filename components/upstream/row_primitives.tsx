@@ -95,11 +95,15 @@ export function ActBtn(
     : (tone === "bad" || danger)
     ? "var(--bad)"
     : undefined;
+  const style = [
+    color ? `color:${color}` : "",
+    disabled ? "cursor:not-allowed" : "",
+  ].filter(Boolean).join(";") || undefined;
   return (
     <button
       type="button"
       class="btn btn-ghost btn-sm"
-      style={color ? `color:${color}` : undefined}
+      style={style}
       disabled={disabled}
       title={title}
       onClick={(e) => {

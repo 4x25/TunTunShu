@@ -32,7 +32,7 @@ interface SysLog {
 const TASK_LABEL: Record<string, string> = {
   site_health_check: "站点健康检查",
   account_checkin: "账号签到",
-  account_quota_sync: "账号额度同步",
+  account_quota_sync: "账号数据同步",
   account_api_key_sync: "账号 APIKey 同步",
   api_key_model_sync: "APIKey 模型同步",
   request_log_flush: "请求日志落盘",

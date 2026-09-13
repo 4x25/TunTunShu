@@ -68,7 +68,11 @@ function rand(n: number) {
 
 const CRON_FIELDS: [string, string, string][] = [
   ["cron_account_checkin", "账号签到", "自动为支持签到的站点领取每日额度。"],
-  ["cron_account_quota_sync", "账号额度同步", "同步各账号剩余与已用额度。"],
+  [
+    "cron_account_quota_sync",
+    "账号数据同步",
+    "同步各账号额度、用户数据与今日签到状态。",
+  ],
   ["cron_site_health_check", "站点健康检查", "定期探测站点可用性与状态。"],
   ["cron_model_sync", "模型同步", "拉取各 Key 可用的上游模型列表。"],
   ["cron_request_log_cleanup", "请求日志清理", "清理超出保留期的请求日志。"],
