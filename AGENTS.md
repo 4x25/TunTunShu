@@ -371,7 +371,8 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
 - `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
   unknown | checked | unchecked | manual_required | failed;`accounts.user_data`
   (jsonb,可空):账号数据同步时落库的 `/api/user/self` data 负载缓存(脱敏 DTO,
-  失败时清空)。
+  失败时清空);`checkin_date`/`checkin_quota`(可空):今日签到记录缓存 (来自
+  /api/user/checkin 的 stats.records,未签到时清空)。
 - `api_keys.status`: unknown | healthy | invalid | quota_empty
 - `upstream_models.status`: unknown | healthy | invalid(**无
   'down'**);`endpoint_type`: 上述 4 种;`model_id` **可为 null**(未映射)
@@ -417,7 +418,11 @@ try/catch)。schedule 在启动时经 `getSettings()` **一次性**读取——*
 同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
 true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
 `failed`);功能未启用/上游 success:false/字段缺失/请求失败时不动本地签到状态,
-日志 message 追加 `checked_in_today=true|false|na`。
+日志 message 追加 `checked_in_today=true|false|na`。已签到时还会把今日记录
+(records 中最大 checkin_date 那条的 `checkin_date`/`quota_awarded`)写入
+`accounts.checkin_date/checkin_quota`,未签到时清空;`checkinAccount` 签到成功后
+同样 best-effort 回拉今日记录落库。账号列表额外透出 `site_checkin_enabled`(来自
+`sites.status_data.checkin_enabled`,null=未知)供 前端签到按钮门禁。
 
 **站点健康检查判定**(`healthCheckSite`,cron 与手动端点共用):请求
 `GET <origin>/api/status`(10s 超时),判定 healthy 需同时满足 HTTP 2xx、
@@ -487,10 +492,15 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
   与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
-  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」请求执行期间按钮显示
-  「验证中…」;最终仍需人工处理时以黄色显示「需手动」。按钮签到成功后**仅在前端**
-  追加一次 best-effort `sync-quota` 刷额度——后端 `checkinAccount`(及
-  cron/批量任务)只签到不刷额度,因该函数被批量共用。
+  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」按钮有四种状态:
+  ①站点未开放签到(`site_checkin_enabled === false`,来自站点 status_data)→
+  置灰禁用 + not-allowed 光标 + hover tip「站点未开放签到功能」;②可签到
+  (checkin_status 为 unchecked/unknown)→ 正常可点击「签到」;③已签到 →
+  绿色「已签到」+ hover tip 展示签到日期与收获额度(取 accounts.checkin_date/
+  checkin_quota);④自动签到已执行但有误(manual_required/failed)→ 黄色
+  「需手动」/红色「签到失败」。请求执行期间按钮显示「验证中…」。按钮签到成功后
+  **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
+  `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「快捷录入」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装油猴脚本
   (`lib/userscript.ts`)在 new-api 站点一键录入站点+账号。登录态解析遵循
   **旧版优先、新版兜底**:先读取 `localStorage.user` 并以 `/api/user/self` 验证旧

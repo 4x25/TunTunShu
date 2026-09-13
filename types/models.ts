@@ -35,6 +35,8 @@ export interface Account {
   quota: number;
   usedQuota: number;
   checkinStatus: CheckinStatus;
+  checkinDate: string | null;
+  checkinQuota: number | null;
   userData: Record<string, unknown> | null;
   lastCheckinLogId: number | null;
   lastQuotaSyncLogId: number | null;

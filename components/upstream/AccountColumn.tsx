@@ -87,23 +87,40 @@ export function AccountColumn(
           ? rows.map((a) => {
             const q = Number(a.quota), u = Number(a.used_quota);
             const ciBusy = busy === "ci" + a.id;
+            // 站点未开放签到(来自 sites.status_data.checkin_enabled;null=未知,
+            // 按可点击处理)
+            const siteCheckinOff = a.site_checkin_enabled === false;
+            const checked = a.checkin_status === "checked";
             const manualRequired = !ciBusy &&
               a.checkin_status === "manual_required";
             const ciLabel = ciBusy
               ? "验证中…"
-              : a.checkin_status === "checked"
+              : checked
               ? "已签到"
               : a.checkin_status === "failed"
               ? "签到失败"
               : manualRequired
               ? "需手动"
               : "签到";
-            const ciTone: "ok" | "bad" | undefined =
-              a.checkin_status === "checked"
-                ? "ok"
-                : a.checkin_status === "failed"
-                ? "bad"
-                : undefined;
+            const ciTone: "ok" | "bad" | undefined = checked
+              ? "ok"
+              : a.checkin_status === "failed"
+              ? "bad"
+              : undefined;
+            // 已签到 tip:签到日期与收获额度(无记录时退回本次操作回执)。
+            const checkinTip = checked
+              ? (a.checkin_date
+                ? `签到日期 ${a.checkin_date}${
+                  a.checkin_quota != null
+                    ? ` · 收获 $${usd(a.checkin_quota).toFixed(2)}`
+                    : ""
+                }`
+                : checkinMsg[a.id])
+              : checkinMsg[a.id];
+            const ciTitle = siteCheckinOff
+              ? "站点未开放签到功能"
+              : checkinTip || undefined;
+            const ciDisabled = ciBusy || siteCheckinOff;
             return (
               <MillerRow
                 key={a.id}
@@ -125,8 +142,8 @@ export function AccountColumn(
                   <ActBtn onClick={() => onLogin(a)}>登录</ActBtn>
                   <ActBtn
                     tone={ciTone}
-                    title={checkinMsg[a.id] || undefined}
-                    disabled={ciBusy}
+                    title={ciTitle}
+                    disabled={ciDisabled}
                     onClick={() => onCheckin(a)}
                   >
                     {manualRequired

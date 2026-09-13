@@ -133,6 +133,12 @@ export async function initializeDatabase() {
     alter table accounts
     add column if not exists user_data jsonb
   `;
+  // checkin_date/checkin_quota 为后加列:缓存今日签到记录(日期与收获额度)。
+  await sql`
+    alter table accounts
+    add column if not exists checkin_date text,
+    add column if not exists checkin_quota bigint
+  `;
   await sql`
     create table if not exists request_logs (
       id bigserial primary key,

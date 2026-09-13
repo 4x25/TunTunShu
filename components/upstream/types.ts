@@ -19,6 +19,9 @@ export interface Account {
   quota: string;
   used_quota: string;
   checkin_status: string;
+  checkin_date?: string | null;
+  checkin_quota?: string | null;
+  site_checkin_enabled?: boolean | null;
 }
 
 export interface ApiKey {

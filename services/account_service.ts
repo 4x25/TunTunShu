@@ -342,7 +342,10 @@ export async function listAccounts(params: PageParams) {
   const items = await sql.unsafe(
     `select distinct accounts.*,
        (select site_lookup.origin from sites site_lookup
-        where site_lookup.id = accounts.site_id) as site_origin
+        where site_lookup.id = accounts.site_id) as site_origin,
+       (select (site_lookup.status_data->>'checkin_enabled')::boolean
+        from sites site_lookup
+        where site_lookup.id = accounts.site_id) as site_checkin_enabled
      ${fromSql} ${whereSql}
      order by accounts.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
@@ -382,14 +385,28 @@ export async function updateAccount(
   return { id, name, userId, enabled };
 }
 
+/** 今日签到记录(来自 new-api /api/user/checkin 的 stats.records)。 */
+export interface TodayCheckinRecord {
+  checkin_date: string;
+  quota_awarded: number | null;
+}
+
+export interface TodayCheckinInfo {
+  /** new-api 前端同样规则:data.stats.checked_in_today;拿不到定论为 null。 */
+  checkedToday: boolean | null;
+  /** 已签到时取 records 中最大 checkin_date 的那条;未签到为 null。 */
+  record: TodayCheckinRecord | null;
+}
+
 /**
- * 参考 new-api 前端(checkin-calendar-card.tsx)的判定:GET /api/user/checkin
- * → `data.stats.checked_in_today === true`。拿不到定论(功能未启用、上游报
- * success:false、字段缺失、请求失败)时返回 null,调用方不动本地签到状态。
+ * GET /api/user/checkin,参考 new-api 前端(checkin-calendar-card.tsx)的判定:
+ * `data.stats.checked_in_today === true`;records 为当月记录
+ * `{checkin_date:"YYYY-MM-DD", quota_awarded:number}`。功能未启用、上游报
+ * success:false、字段缺失或请求失败时返回 null,调用方不动本地状态。
  */
-async function fetchCheckedInToday(
+async function fetchTodayCheckin(
   auth: { origin: string; userId: string; accessToken: string },
-): Promise<boolean | null> {
+): Promise<TodayCheckinInfo | null> {
   try {
     const res = await adapter.getCheckinStatus(
       {
@@ -401,13 +418,36 @@ async function fetchCheckedInToday(
     );
     if (!res.ok) return null;
     const body = await res.json().catch(() => null) as
-      | { success?: unknown; data?: { stats?: { checked_in_today?: unknown } } }
+      | {
+        success?: unknown;
+        data?: {
+          stats?: {
+            checked_in_today?: unknown;
+            records?: unknown;
+          };
+        };
+      }
       | null;
     if (body?.success !== true) return null;
-    const checked = body.data?.stats?.checked_in_today;
-    if (checked === true) return true;
-    if (checked === false) return false;
-    return null;
+    const stats = body.data?.stats;
+    const checked = stats?.checked_in_today;
+    if (checked !== true && checked !== false) return null;
+    let record: TodayCheckinRecord | null = null;
+    if (checked && Array.isArray(stats?.records)) {
+      for (const item of stats.records) {
+        if (typeof item?.checkin_date !== "string") continue;
+        const quotaAwarded = typeof item.quota_awarded === "number"
+          ? item.quota_awarded
+          : null;
+        if (!record || item.checkin_date > record.checkin_date) {
+          record = {
+            checkin_date: item.checkin_date,
+            quota_awarded: quotaAwarded,
+          };
+        }
+      }
+    }
+    return { checkedToday: checked, record };
   } catch {
     return null;
   }
@@ -429,10 +469,12 @@ export async function syncAccountData(id: number) {
       user_id: string;
       access_token: string;
       checkin_status: string;
+      checkin_date: string | null;
+      checkin_quota: string | number | null;
       origin: string;
     }[]
   >`
-    select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, accounts.checkin_status, sites.origin
+    select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, accounts.checkin_status, accounts.checkin_date, accounts.checkin_quota, sites.origin
     from accounts
     join sites on sites.id = accounts.site_id
     where accounts.id = ${id}
@@ -461,12 +503,17 @@ export async function syncAccountData(id: number) {
     const status = ok ? quota === 0 ? "quota_empty" : "healthy" : "invalid";
     let message = JSON.stringify(data).slice(0, 1000);
     let checkinStatus: "checked" | "unchecked" | null = null;
+    // 今日签到记录:已签到时为今日 date/quota;未签到时清空;拿不到定论时保留原值。
+    let checkinDate: string | null = account.checkin_date;
+    let checkinQuota: string | number | null = account.checkin_quota;
     if (ok) {
-      const checkedToday = await fetchCheckedInToday(auth);
-      if (checkedToday === null) {
+      const info = await fetchTodayCheckin(auth);
+      if (info === null || info.checkedToday === null) {
         message += " checked_in_today=na";
-      } else if (checkedToday) {
+      } else if (info.checkedToday) {
         checkinStatus = "checked";
+        checkinDate = info.record?.checkin_date ?? null;
+        checkinQuota = info.record?.quota_awarded ?? null;
         message += " checked_in_today=true";
       } else if (
         account.checkin_status === "manual_required" ||
@@ -474,9 +521,13 @@ export async function syncAccountData(id: number) {
       ) {
         // 未签到时不覆盖 manual_required/failed——它们是本系统自己标记的
         // 「需人工处理/浏览器签到失败」,比上游布尔状态更有信息量。
+        checkinDate = null;
+        checkinQuota = null;
         message += " checked_in_today=false (preserved)";
       } else {
         checkinStatus = "unchecked";
+        checkinDate = null;
+        checkinQuota = null;
         message += " checked_in_today=false";
       }
     }
@@ -492,6 +543,8 @@ export async function syncAccountData(id: number) {
       set quota = ${quota}, used_quota = ${usedQuota}, status = ${status},
           user_data = ${ok ? JSON.stringify(payload) : null}::jsonb,
           checkin_status = ${checkinStatus ?? account.checkin_status},
+          checkin_date = ${checkinDate},
+          checkin_quota = ${checkinQuota},
           last_quota_sync_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
@@ -917,7 +970,20 @@ export async function checkinAccount(id: number) {
     accountId: account.id,
     message: result.message.slice(0, 1000),
   });
-  await sql`update accounts set checkin_status = ${result.checkinStatus}, last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
+  // 签到成功后 best-effort 回拉今日记录(日期/收获额度),供前端「已签到」tip 使用;
+  // 拉不到时置空,后续账号数据同步会补上。
+  let checkinDate: string | null = null;
+  let checkinQuota: number | null = null;
+  if (result.checkinStatus === "checked") {
+    const info = await fetchTodayCheckin(accountAuth(account)).catch(() =>
+      null
+    );
+    if (info?.checkedToday) {
+      checkinDate = info.record?.checkin_date ?? null;
+      checkinQuota = info.record?.quota_awarded ?? null;
+    }
+  }
+  await sql`update accounts set checkin_status = ${result.checkinStatus}, checkin_date = ${checkinDate}, checkin_quota = ${checkinQuota}, last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
   return {
     ok: result.checkinStatus === "checked",
     ...(result.status === undefined ? {} : { status: result.status }),
