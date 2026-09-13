@@ -71,7 +71,7 @@ const CRON_FIELDS: [string, string, string][] = [
   [
     "cron_account_quota_sync",
     "账号数据同步",
-    "同步各账号额度、用户数据与今日签到状态。",
+    "同步各账号额度、用户数据、今日签到状态并自动拉取 Key。",
   ],
   ["cron_site_health_check", "站点健康检查", "定期探测站点可用性与状态。"],
   ["cron_model_sync", "模型同步", "拉取各 Key 可用的上游模型列表。"],
