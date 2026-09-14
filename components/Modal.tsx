@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
+import classNames from "classnames";
 
 // 退场动画时长,需与 assets/app.css 的 ttModalCardOut/ttModalMaskOut 一致。
 const EXIT_MS = 160;
@@ -46,13 +47,13 @@ export function Modal(
 
   return (
     <div
-      class={`modal-mask on${closing ? " closing" : ""}`}
+      class={classNames("modal-mask on", { closing })}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        class={`modal-card${wide ? " wide" : ""}${closing ? " closing" : ""}`}
+        class={classNames("modal-card", { wide, closing })}
         role="dialog"
         aria-modal="true"
       >

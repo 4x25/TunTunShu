@@ -1,4 +1,5 @@
 import { EndpointIcon } from "../brand_icons.tsx";
+import classNames from "classnames";
 import { IconClose } from "../icons.tsx";
 import { Modal } from "../Modal.tsx";
 import { ENDPOINT_LABELS, TEST_KINDS } from "./constants.ts";
@@ -49,7 +50,12 @@ export function TestResultModal(
                   <div class="tr-row">
                     <span class="tr-k">结论</span>
                     <span class="tr-v">
-                      <span class={`pill pill-${testOut.pass ? "ok" : "bad"}`}>
+                      <span
+                        class={classNames("pill", {
+                          "pill-ok": testOut.pass,
+                          "pill-bad": !testOut.pass,
+                        })}
+                      >
                         {testOut.pass ? "通过" : "未通过"}
                       </span>
                       <span class="muted" style="margin-left:8px">

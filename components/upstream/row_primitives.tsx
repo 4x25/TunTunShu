@@ -1,11 +1,12 @@
 import type { ComponentChildren, JSX } from "preact";
+import classNames from "classnames";
 import { IconCheck, IconCopy } from "../icons.tsx";
 import { STATUS_MAP } from "./constants.ts";
 
 export function Pill({ status }: { status: string }) {
   const x = STATUS_MAP[status] || STATUS_MAP.unknown;
   return (
-    <span class={`pill pill-${x[0]}`}>
+    <span class={classNames("pill", `pill-${x[0]}`)}>
       <span class="dot"></span>
       {x[1]}
     </span>
@@ -36,9 +37,11 @@ export function MillerRow(
 ) {
   return (
     <div
-      class={`mrow${leaf ? " leaf" : ""}${selected ? " sel" : ""}${
-        off ? " off" : ""
-      }`}
+      class={classNames("mrow", {
+        leaf,
+        sel: selected,
+        off,
+      })}
       onClick={onClick}
     >
       {children}
@@ -102,10 +105,10 @@ export function ActBtn(
   return (
     <button
       type="button"
-      class="btn btn-ghost btn-sm"
+      class={classNames("btn btn-ghost btn-sm", { tooltip: title })}
       style={style}
       disabled={disabled}
-      title={title}
+      data-tip={title}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -128,8 +131,8 @@ export function CopyBtn(
   return (
     <button
       type="button"
-      class="copy-btn"
-      title={label}
+      class="copy-btn tooltip"
+      data-tip={label}
       aria-label={label}
       onClick={(e) => {
         e.stopPropagation();
@@ -156,7 +159,7 @@ export function Field(
     <div class="field">
       <label>{label}</label>
       <input
-        class={`input${error ? " input-err" : ""}`}
+        class={classNames("input", { "input-err": error })}
         type={type ?? "text"}
         placeholder={hint}
         value={form[k] ?? ""}

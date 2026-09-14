@@ -1,3 +1,4 @@
+import classNames from "classnames";
 import { useEffect, useState } from "preact/hooks";
 import { apiGet, fetchAllPages } from "../components/admin_api.ts";
 
@@ -214,14 +215,14 @@ export default function LogsApp() {
       <div class="tabs">
         <button
           type="button"
-          class={curTab === "req" ? "active" : undefined}
+          class={classNames({ active: curTab === "req" })}
           onClick={() => setCurTab("req")}
         >
           请求日志 <span class="cnt">{reqRows.length}</span>
         </button>
         <button
           type="button"
-          class={curTab === "sys" ? "active" : undefined}
+          class={classNames({ active: curTab === "sys" })}
           onClick={() => setCurTab("sys")}
         >
           系统日志 <span class="cnt">{sysRows.length}</span>
@@ -229,7 +230,7 @@ export default function LogsApp() {
       </div>
 
       {/* 请求日志 */}
-      <div class={curTab === "req" ? "panel on" : "panel"}>
+      <div class={classNames("panel", { on: curTab === "req" })}>
         <div class="filterbar">
           <div class="search">
             <svg
@@ -289,7 +290,7 @@ export default function LogsApp() {
                   ? reqRows.map((l) => (
                     <>
                       <tr
-                        class={`logrow ${l.status}`}
+                        class={classNames("logrow", l.status)}
                         onClick={() =>
                           setOpen((o) => ({ ...o, [l.id]: !o[l.id] }))}
                       >
@@ -379,7 +380,7 @@ export default function LogsApp() {
       </div>
 
       {/* 系统日志 */}
-      <div class={curTab === "sys" ? "panel on" : "panel"}>
+      <div class={classNames("panel", { on: curTab === "sys" })}>
         <div class="filterbar">
           <div class="search">
             <svg

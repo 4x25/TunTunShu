@@ -1,3 +1,5 @@
+import classNames from "classnames";
+
 export interface MenuAction {
   key: string;
   label: string;
@@ -45,8 +47,8 @@ export function CreateMenu(
         </button>
         <button
           type="button"
-          class="btn btn-primary btn-sm join-item"
-          title="批量操作"
+          class="btn btn-primary btn-sm join-item tooltip tooltip-bottom tooltip-end"
+          data-tip="批量操作"
           popovertarget={menuId}
           style={`anchor-name:${anchor}`}
           disabled={busy != null}
@@ -64,7 +66,8 @@ export function CreateMenu(
           <li key={a.key}>
             <button
               type="button"
-              title={a.title}
+              class={classNames({ tooltip: a.title })}
+              data-tip={a.title}
               onClick={() => {
                 document.getElementById(menuId)?.hidePopover();
                 a.onRun();

@@ -1,3 +1,4 @@
+import classNames from "classnames";
 import { useEffect, useState } from "preact/hooks";
 import { IconClose } from "../components/icons.tsx";
 import { Modal } from "../components/Modal.tsx";
@@ -272,7 +273,7 @@ export default function ModelsApp() {
             <button
               type="button"
               key={k}
-              class={f === k ? "active" : undefined}
+              class={classNames({ active: f === k })}
               onClick={() => setF(k)}
             >
               {k === "all" ? "全部" : k === "on" ? "启用" : "停用"}

@@ -1,3 +1,4 @@
+import classNames from "classnames";
 import { useEffect, useState } from "preact/hooks";
 
 const KEY = "tts-theme";
@@ -35,7 +36,7 @@ export default function ThemeToggle({ class: extra }: { class?: string }) {
   return (
     <button
       type="button"
-      class={extra ? `icon-btn ${extra}` : "icon-btn"}
+      class={classNames("icon-btn", extra)}
       aria-label={label}
       title={mounted ? label : undefined}
       onClick={toggle}

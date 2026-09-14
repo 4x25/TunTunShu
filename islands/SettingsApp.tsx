@@ -1,3 +1,4 @@
+import classNames from "classnames";
 import { useEffect, useState } from "preact/hooks";
 import { IconClock, IconSave } from "../components/icons.tsx";
 import { apiGet, apiSend } from "../components/admin_api.ts";
@@ -308,9 +309,10 @@ export default function SettingsApp() {
                 : <span class="pill pill-bad">运行时不可用</span>}
               {automationStatus && (
                 <span
-                  class={`pill ${
-                    automationStatus.busy ? "pill-warn" : "pill-mute"
-                  }`}
+                  class={classNames("pill", {
+                    "pill-warn": automationStatus.busy,
+                    "pill-mute": !automationStatus.busy,
+                  })}
                 >
                   {automationStatus.busy ? "正在验证" : "当前空闲"}
                 </span>

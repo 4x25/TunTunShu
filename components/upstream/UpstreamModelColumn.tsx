@@ -1,4 +1,5 @@
 import { EndpointIcon } from "../brand_icons.tsx";
+import classNames from "classnames";
 import { IconSearch } from "../icons.tsx";
 import { ENDPOINT_LABELS, ENDPOINT_OPTIONS, TEST_KINDS } from "./constants.ts";
 import { handleColumnScroll } from "./list_state.ts";
@@ -91,13 +92,15 @@ export function UpstreamModelColumn(
                   onToggle={() => onToggle(m)}
                   leading={
                     <div
-                      class={`dd ep-dd${openEp === m.id ? " open" : ""}`}
+                      class={classNames("dd ep-dd", {
+                        open: openEp === m.id,
+                      })}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <button
                         type="button"
-                        class="ep-btn"
-                        title={`协议:${
+                        class="ep-btn tooltip tooltip-bottom tooltip-start"
+                        data-tip={`协议:${
                           ENDPOINT_LABELS[m.endpoint_type] ?? m.endpoint_type
                         }(点击切换)`}
                         disabled={busy === "ep" + m.id}
@@ -121,9 +124,9 @@ export function UpstreamModelColumn(
                           {ENDPOINT_OPTIONS.map((ep) => (
                             <div
                               key={ep}
-                              class={`dd-item${
-                                m.endpoint_type === ep ? " sel" : ""
-                              }`}
+                              class={classNames("dd-item", {
+                                sel: m.endpoint_type === ep,
+                              })}
                               onClick={() => onEndpointSelect(m, ep)}
                             >
                               <EndpointIcon type={ep} class="brand-ico" />
@@ -138,10 +141,10 @@ export function UpstreamModelColumn(
                     </div>
                   }
                 />
-                <div class={`dd${openDd === m.id ? " open" : ""}`}>
+                <div class={classNames("dd", { open: openDd === m.id })}>
                   <button
                     type="button"
-                    class={`dd-btn${mapped ? "" : " unmapped"}`}
+                    class={classNames("dd-btn", { unmapped: !mapped })}
                     disabled={busy === "map" + m.id}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -170,7 +173,7 @@ export function UpstreamModelColumn(
                     </div>
                     <div class="dd-list">
                       <div
-                        class={`dd-item${mapped ? "" : " sel"}`}
+                        class={classNames("dd-item", { sel: !mapped })}
                         style="color:var(--muted)"
                         onClick={() => onMap(m.id, null)}
                       >
@@ -179,9 +182,9 @@ export function UpstreamModelColumn(
                       {ddItems.map((mod) => (
                         <div
                           key={mod.id}
-                          class={`dd-item${
-                            m.model_id === mod.id ? " sel" : ""
-                          }`}
+                          class={classNames("dd-item", {
+                            sel: m.model_id === mod.id,
+                          })}
                           onClick={() => onMap(m.id, mod.id)}
                         >
                           {mod.name}

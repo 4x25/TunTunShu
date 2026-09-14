@@ -23,7 +23,12 @@ Bearer(`tts-auth`)、 `/api/*` 管理令牌,以及恒定有效的 `/v1` 代理 K
   DaisyUI,Vite 构建。Fresh 在服务端渲染 HTML 外壳 + Layout + island
   初始标记,islands 在浏览器 hydrate; **页面 handler
   不做任何服务端取数**,所有数据在浏览器侧请求 `/api/*`。(并非 “CSR-only”——外壳是
-  SSR 的。)
+  SSR 的。)条件类名一律用 `classnames`(npm:classnames,默认导入
+  `import classNames from "classnames"`)拼装——
+  `classNames("dd", { open: cond })`,**禁止**手写
+  ``class={`x${cond ? " y" : ""}`} `
+  模板字符串拼接;动态片段(如`` `pill-${x}`
+  ``)可作为参数传入。
 - **Database**: PostgreSQL,经 `npm:postgres` 原始驱动。**无 ORM、无 migration
   框架**。
 - **AI SDK(仅服务端)**:
@@ -511,7 +516,8 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
   与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
-  a→z。probe-name「自动获取」自动填站点/账号名。账号「签到」按钮有四种状态:
+  a→z。probe-name「自动获取」自动填站点/账号名。上游页所有带悬浮提示的按钮(行操作签到/复制密钥/协议图标/工具栏免登脚本等)统一用
+  daisyUI `tooltip` 组件(`data-tip`,非原生 title);账号「签到」按钮有四种状态:
   ①站点未开放签到(`site_checkin_enabled === false`,来自站点 status_data)→
   置灰禁用 + not-allowed 光标 + hover tip「站点未开放签到功能」;②可签到
   (checkin_status 为 unchecked/unknown)→ 正常可点击「签到」;③已签到 →

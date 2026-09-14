@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import classNames from "classnames";
 import ThemeToggle from "../islands/ThemeToggle.tsx";
 import { IconDoc, IconFeedback, IconGitHub, IconLogout } from "./icons.tsx";
 
@@ -41,7 +42,7 @@ export function Layout(
             {NAV.map((item) => (
               <a
                 href={item.href}
-                class={active === item.key ? "active" : undefined}
+                class={classNames({ active: active === item.key })}
               >
                 {item.label}
               </a>

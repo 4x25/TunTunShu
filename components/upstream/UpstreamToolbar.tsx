@@ -1,3 +1,4 @@
+import classNames from "classnames";
 import type { Flash } from "./types.ts";
 
 export function UpstreamToolbar(
@@ -28,7 +29,10 @@ export function UpstreamToolbar(
       <div class="kbar">
         {flash && (
           <span
-            class={`pill ${flash.ok ? "pill-ok" : "pill-bad"}`}
+            class={classNames("pill", {
+              "pill-ok": flash.ok,
+              "pill-bad": !flash.ok,
+            })}
             style="max-width:380px;overflow:hidden;text-overflow:ellipsis"
           >
             {flash.text}
@@ -43,16 +47,16 @@ export function UpstreamToolbar(
         </button>
         <button
           type="button"
-          class="btn btn-ghost btn-sm"
-          title="安装油猴脚本,免输密码打开 new-api 上游账号"
+          class="btn btn-ghost btn-sm tooltip tooltip-bottom tooltip-end"
+          data-tip="安装油猴脚本,免输密码打开 new-api 上游账号"
           onClick={onInstallLoginScript}
         >
           免登脚本
         </button>
         <button
           type="button"
-          class="btn btn-ghost btn-sm"
-          title="安装油猴脚本,在 new-api 站点一键录入站点与账号"
+          class="btn btn-ghost btn-sm tooltip tooltip-bottom tooltip-end"
+          data-tip="安装油猴脚本,在 new-api 站点一键录入站点与账号"
           onClick={onQuickEntry}
         >
           快捷录入

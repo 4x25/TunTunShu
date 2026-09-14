@@ -1,3 +1,4 @@
+import classNames from "classnames";
 import { IconClose } from "../icons.tsx";
 import { Modal } from "../Modal.tsx";
 import { Field } from "./row_primitives.tsx";
@@ -77,7 +78,9 @@ export function ResourceModal(
                   </label>
                   <div class="token-row">
                     <input
-                      class={`input${errors.name ? " input-err" : ""}`}
+                      class={classNames("input", {
+                        "input-err": errors.name,
+                      })}
                       placeholder="留空将自动获取站点名称"
                       value={form.name ?? ""}
                       onInput={(e) =>
@@ -115,7 +118,9 @@ export function ResourceModal(
                   <div class="field">
                     <label>所属站点</label>
                     <select
-                      class={`select${errors.siteId ? " input-err" : ""}`}
+                      class={classNames("select", {
+                        "input-err": errors.siteId,
+                      })}
                       value={form.siteId ?? ""}
                       onChange={(e) =>
                         onFieldChange(
@@ -154,7 +159,9 @@ export function ResourceModal(
                   <label>账号名称（可留空，自动获取）</label>
                   <div class="token-row">
                     <input
-                      class={`input${errors.name ? " input-err" : ""}`}
+                      class={classNames("input", {
+                        "input-err": errors.name,
+                      })}
                       placeholder={modal.mode === "create"
                         ? "留空将自动获取用户名"
                         : "留空则保持原名称"}
@@ -189,7 +196,9 @@ export function ResourceModal(
                 <div class="field">
                   <label>所属账号</label>
                   <select
-                    class={`select${errors.accountId ? " input-err" : ""}`}
+                    class={classNames("select", {
+                      "input-err": errors.accountId,
+                    })}
                     value={form.accountId ?? ""}
                     onChange={(e) =>
                       onFieldChange(

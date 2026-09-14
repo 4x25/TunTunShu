@@ -23,6 +23,7 @@
   ],
   "imports": {
     "@/": "./",
+    "classnames": "npm:classnames@^2.5.1",
     "daisyui": "npm:daisyui@^5.5.23",
     "fresh": "jsr:@fresh/core@^2.3.3",
     "preact": "npm:preact@^10.29.1",
