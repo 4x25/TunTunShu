@@ -27,6 +27,7 @@ export function AccountColumn(
     onPick,
     onToggle,
     onLogin,
+    loginHref,
     onCheckin,
     onCheck,
     onEdit,
@@ -46,6 +47,8 @@ export function AccountColumn(
     onPick: (id: string) => void;
     onToggle: (account: Account) => void;
     onLogin: (account: Account) => void;
+    /** 免登脚本就绪且 Origin 合法时返回带凭据 fragment 的登录链接,否则 undefined。 */
+    loginHref: (account: Account) => string | undefined;
     onCheckin: (account: Account) => void;
     onCheck: (account: Account) => void;
     onEdit: (account: Account) => void;
@@ -96,6 +99,8 @@ export function AccountColumn(
           ? rows.map((a) => {
             const q = Number(a.quota), u = Number(a.used_quota);
             const ciBusy = busy === "ci" + a.id;
+            // 免登脚本就绪且 Origin 合法时才有登录链接;否则 onClick 拦截并弹引导。
+            const loginUrl = loginHref(a);
             // 站点未开放签到(来自 sites.status_data.checkin_enabled;null=未知,
             // 按可点击处理)
             const siteCheckinOff = a.site_checkin_enabled === false;
@@ -154,7 +159,23 @@ export function AccountColumn(
                   >
                     {busy === "ac" + a.id ? "检测中…" : "检测"}
                   </ActBtn>
-                  <ActBtn onClick={() => onLogin(a)}>登录</ActBtn>
+                  <a
+                    class="btn btn-ghost btn-sm"
+                    href={loginUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // 链接可用时交给浏览器原生新标签打开;否则拦截并弹引导。
+                      // href 不总是写入凭据链接:中键/右键复制等会绕过 onClick,
+                      // 未装脚本时没人清 fragment,PAT 不能进入 URL。
+                      if (loginUrl) return;
+                      e.preventDefault();
+                      onLogin(a);
+                    }}
+                  >
+                    登录
+                  </a>
                   <ActBtn
                     tone={ciTone}
                     title={ciTitle}

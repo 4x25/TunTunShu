@@ -11,13 +11,14 @@ import {
   STATUS_MAP,
 } from "../components/upstream/constants.ts";
 import { useDebouncedValue } from "../components/upstream/list_state.ts";
+import { LoginScriptModal } from "../components/upstream/LoginScriptModal.tsx";
 import { NewModelModal } from "../components/upstream/NewModelModal.tsx";
 import { ResourceModal } from "../components/upstream/ResourceModal.tsx";
 import { SiteColumn } from "../components/upstream/SiteColumn.tsx";
 import { TestResultModal } from "../components/upstream/TestResultModal.tsx";
 import { UpstreamModelColumn } from "../components/upstream/UpstreamModelColumn.tsx";
 import {
-  buildUpstreamLoginUrl,
+  buildAccountLoginHref,
   isUpstreamLoginScriptInstalled,
   UPSTREAM_LOGIN_SCRIPT_PATH,
 } from "../components/upstream/upstream_login.ts";
@@ -86,6 +87,7 @@ export default function UpstreamApp() {
   const [openEp, setOpenEp] = useState<string | null>(null);
   const [testView, setTestView] = useState<TestView | null>(null);
   const [testOut, setTestOut] = useState<TestResult | "loading" | null>(null);
+  const [loginHelpOpen, setLoginHelpOpen] = useState(false);
 
   const [flash, setFlash] = useState<Flash | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -156,6 +158,7 @@ export default function UpstreamApp() {
         setModal(null);
         setNmFor(null);
         setTestView(null);
+        setLoginHelpOpen(false);
       }
     };
     document.addEventListener("click", onClick);
@@ -578,34 +581,31 @@ export default function UpstreamApp() {
   const installLoginScript = () => {
     openDetached(UPSTREAM_LOGIN_SCRIPT_PATH);
   };
+  // 免登脚本的 marker 在 document-start 注入,页面存续期内不会变化;
+  // 脚本未就绪时绝不把 PAT 写进「登录」链接的 href。
+  const loginScriptInstalled = isUpstreamLoginScriptInstalled(globalThis);
+  const loginHref = (account: Account): string | undefined =>
+    buildAccountLoginHref(
+      loginScriptInstalled,
+      account.site_origin ??
+        sites.find((candidate) => candidate.id === account.site_id)?.origin,
+      account.access_token,
+      account.user_id,
+    ) ?? undefined;
+  // 「登录」是真实 <a>:有 href 时由浏览器原生新标签打开,不会进入本函数;
+  // 这里只处理链接不可用(未装脚本 / Origin 缺失或非法)的分支。
   const loginUpstream = (account: Account) => {
-    if (!isUpstreamLoginScriptInstalled(globalThis)) {
-      showFlash("请先安装免登脚本并刷新囤囤鼠页面", false);
-      installLoginScript();
+    if (!loginScriptInstalled) {
+      setLoginHelpOpen(true);
       return;
     }
-
     const siteOrigin = account.site_origin ??
       sites.find((candidate) => candidate.id === account.site_id)?.origin;
     if (!siteOrigin) {
       showFlash(`未找到账号「${account.name}」所属站点`, false);
       return;
     }
-
-    try {
-      openDetached(
-        buildUpstreamLoginUrl(
-          siteOrigin,
-          account.access_token,
-          account.user_id,
-        ),
-      );
-    } catch (error) {
-      showFlash(
-        error instanceof Error ? error.message : "站点 Origin 无效",
-        false,
-      );
-    }
+    showFlash("站点 Origin 无效，请编辑站点后重试", false);
   };
 
   return (
@@ -651,6 +651,7 @@ export default function UpstreamApp() {
           onPick={pickAccount}
           onToggle={toggleAcc}
           onLogin={loginUpstream}
+          loginHref={loginHref}
           onCheckin={checkin}
           onCheck={checkAccount}
           onEdit={openEditAccount}
@@ -733,6 +734,10 @@ export default function UpstreamApp() {
         testOut={testOut}
         onClose={() => setTestView(null)}
         onRunAgain={rerunTest}
+      />
+      <LoginScriptModal
+        open={loginHelpOpen}
+        onClose={() => setLoginHelpOpen(false)}
       />
     </>
   );

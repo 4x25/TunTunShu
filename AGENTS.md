@@ -541,11 +541,17 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   siteId/userId/accessToken,**不回传 APIKey**(由后端 同步拉取)。
 - **上游账号 PAT 免登**:工具栏「免登脚本」安装公开的
   `/tuntunshu-login.user.js`(`lib/upstream_login_userscript.ts`,脚本版本
-  `1.0.0`), 账号行「登录」仅在当前页检测到脚本同步暴露的
-  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "1.0.0"` 后才会构造并打开
-  `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...`。未安装或
-  版本不符时**不得把 PAT 放入 URL**,只提示并打开安装入口。账号列表额外返回
-  `site_origin` 供登录使用(仍保留裸 `site_id`),避免站点分页尚未加载时无法登录;
+  `1.0.0`), 账号行「登录」渲染为真实
+  `<a target="_blank"
+  rel="noopener noreferrer">`:仅当当前页检测到脚本同步暴露的
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "1.0.0"`
+  (`buildAccountLoginHref`)时才把
+  `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...` 写入
+  href,交给浏览器原生新标签打开(支持中键/右键复制链接);未安装或版本不符时
+  **不得把 PAT 放入 URL**(href 留空),点击弹出「未检测到免登脚本」分步引导
+  弹窗(`LoginScriptModal`:第一步安装脚本 → 第二步刷新本页 → 第三步重试
+  登录),弹窗与工具栏均提供安装入口。账号列表额外返回 `site_origin`
+  供登录使用(仍保留裸 `site_id`),避免站点分页尚未加载时无法登录;
   站点必须是无路径、查询、fragment 或 URL 用户信息的纯 `http(s)`
   origin。新标签以 `noopener,noreferrer` 打开,脚本以最终页面的 `location.origin`
   为准。
@@ -596,7 +602,8 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   fetch/XHR 同源注入及外域隔离、新版 AuthBundle、禁止 PAT 轮换与退出清理,以及
   CloakBrowser memory-only bootstrap 不把凭据写入 URL/Storage。
 - `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
-  HTTP(S) origin 校验与 fragment 凭据编码。
+  HTTP(S) origin 校验、fragment 凭据编码,以及登录链接仅在脚本就绪且 Origin
+  合法时携带 PAT。
 - `services/checkin_classifier_test.ts`:覆盖直连成功/普通失败/明确 captcha
   与可信 Cloudflare challenge 分类,以及浏览器开关/超时安全归一化。
 - `services/browser_checkin_lease_service_test.ts`:用内存 lease store +
@@ -665,6 +672,7 @@ Fresh
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。
 - `GET /tuntunshu-login.user.js` 同样无鉴权,但源码只包含通用免登逻辑和自身
-  安装/更新 URL;PAT/userId 仅在账号「登录」点击后进入目标上游的 URL fragment。
+  安装/更新 URL;PAT/userId 仅在页面检测到免登脚本后,才进入账号「登录」链接 href
+  的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
 - 版本号:UI 页脚/登录页显示 `v1.5.0`,快捷录入油猴脚本独立 `@version 1.3.2`,
   上游免登油猴脚本独立 `@version 1.0.0`;`deno.json` 无 version 字段。

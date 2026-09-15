@@ -1,4 +1,5 @@
 import {
+  buildAccountLoginHref,
   buildUpstreamLoginUrl,
   isUpstreamLoginScriptInstalled,
   parsePureHttpOrigin,
@@ -64,4 +65,45 @@ Deno.test("upstream login marker 必须精确匹配脚本版本", () => {
   assert(!isUpstreamLoginScriptInstalled(scope), "stale marker accepted");
   Reflect.set(scope, UPSTREAM_LOGIN_SCRIPT_MARKER, "1.0.0");
   assert(isUpstreamLoginScriptInstalled(scope), "current marker rejected");
+});
+
+Deno.test("账号登录链接仅在脚本就绪且 Origin 合法时携带 PAT", () => {
+  assertEquals(
+    buildAccountLoginHref(false, "https://example.com", "pat-token", "42"),
+    null,
+    "script missing must not expose PAT",
+  );
+  assertEquals(
+    buildAccountLoginHref(true, null, "pat-token", "42"),
+    null,
+    "missing origin must not build link",
+  );
+  assertEquals(
+    buildAccountLoginHref(true, undefined, "pat-token", "42"),
+    null,
+    "undefined origin must not build link",
+  );
+  assertEquals(
+    buildAccountLoginHref(true, "https://example.com/path", "pat-token", "42"),
+    null,
+    "invalid origin must not build link",
+  );
+  assertEquals(
+    buildAccountLoginHref(true, "not a url", "pat-token", "42"),
+    null,
+    "non-URL origin must not build link",
+  );
+  const href = buildAccountLoginHref(
+    true,
+    "https://example.com",
+    "pat-token",
+    "42",
+  );
+  assert(href !== null, "valid input must build link");
+  assert(
+    href.startsWith("https://example.com/#__tts_upstream_login__?"),
+    "link must target upstream fragment",
+  );
+  assert(href.includes("accessToken=pat-token"), "link must carry PAT");
+  assert(href.includes("userId=42"), "link must carry userId");
 });

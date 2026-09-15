@@ -38,3 +38,22 @@ export function buildUpstreamLoginUrl(
   const params = new URLSearchParams({ accessToken, userId });
   return `${origin}/#__tts_upstream_login__?${params.toString()}`;
 }
+
+/**
+ * 计算账号行「登录」链接的 href:仅当免登脚本在本页可用(scriptInstalled)且
+ * 站点 Origin 合法时,才把 accessToken/userId 组装进 URL fragment;任一条件
+ * 不满足都返回 null,PAT 绝不进入链接/DOM。
+ */
+export function buildAccountLoginHref(
+  scriptInstalled: boolean,
+  siteOrigin: string | null | undefined,
+  accessToken: string,
+  userId: string,
+): string | null {
+  if (!scriptInstalled || !siteOrigin) return null;
+  try {
+    return buildUpstreamLoginUrl(siteOrigin, accessToken, userId);
+  } catch {
+    return null;
+  }
+}
