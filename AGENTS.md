@@ -104,8 +104,8 @@ read`。CI 只做质量门禁,**不负责部署**——部署仍由 Deno Deploy
 
 ## Entrypoint & Startup(main.ts)
 
-启动顺序:`app.use(staticFiles())` → 中间件服务 `GET /tuntunshu.user.js` 与
-`GET /tuntunshu-login.user.js`(均无鉴权)→ `await initializeDatabase()` →
+启动顺序:`app.use(staticFiles())` → 中间件服务 `GET /tuntunshu.user.js`
+(无鉴权,合并后的「囤囤鼠脚本」)→ `await initializeDatabase()` →
 `if (typeof Deno.cron === "function")` 注册 5 个 cron 任务(schedule 在此处经
 `getSettings()` **一次性**读取,每个任务体各自 try/catch)→
 `app.fsRoutes()`。main.ts 里没有显式 `Deno.serve`——服务由
@@ -297,7 +297,7 @@ origin 例外)。公网判定对 IPv6 采用 global-unicast allowlist 并排除 
 文档/协议专用网段。service worker 与下载被禁用。Chromium 子进程环境采用
 allowlist(`Deno.Command` 探测额外使用 `clearEnv:true`),不会继承
 `AUTH_KEY`、`DATABASE_DSN` 等应用 secrets(仅按需透传 CloakBrowser
-license)。自动化与公开免登油猴脚本共用
+license)。自动化与公开「囤囤鼠脚本」共用
 `buildUpstreamLoginRuntimeSource()`:PAT/userId/user 由 Playwright init-script
 放入页面内存 bootstrap,共享 runtime 同步取走后只保存在闭包中,**不会写入
 URL、sessionStorage 或 localStorage**。
@@ -516,7 +516,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
   与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
-  a→z。probe-name「自动获取」自动填站点/账号名。上游页所有带悬浮提示的按钮(行操作签到/复制密钥/协议图标/工具栏免登脚本等)统一用
+  a→z。probe-name「自动获取」自动填站点/账号名。上游页所有带悬浮提示的按钮(行操作签到/复制密钥/协议图标/工具栏脚本安装等)统一用
   daisyUI `tooltip` 组件(`data-tip`,非原生 title);账号「签到」按钮有四种状态:
   ①站点未开放签到(`site_checkin_enabled === false`,来自站点 status_data)→
   置灰禁用 + not-allowed 光标 + hover tip「站点未开放签到功能」;②可签到
@@ -526,10 +526,16 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   「需手动」/红色「签到失败」。请求执行期间按钮显示「验证中…」。按钮签到成功后
   **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
   `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
-- **「快捷录入」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装油猴脚本
-  (`lib/userscript.ts`)在 new-api 站点一键录入站点+账号。登录态解析遵循
-  **旧版优先、新版兜底**:先读取 `localStorage.user` 并以 `/api/user/self` 验证旧
-  session; 本地用户缺失/无效或旧验证返回 401 时,才调
+- **「囤囤鼠脚本」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装合并后的
+  唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.0`),它同时提供「快捷录入」与 「上游
+  PAT 免登」。脚本在页面右下角注入唯一的小胶囊按钮:免登状态显示
+  「免登中(用户名)」,点击后 `confirm` 确认再退出;其他状态显示「快捷录入」;
+  录入或免登前置进行中则按步骤显示文案与进度条。脚本以
+  `@grant GM_xmlhttpRequest` + `@inject-into page` + `@run-at document-start`
+  注入,跨域调囤囤鼠 API 走 `GM_xmlhttpRequest`,页面 realm 用
+  `unsafeWindow || globalThis` 解析(Tampermonkey 沙箱下仍能补丁页面 fetch/XHR)。
+  登录态解析遵循 **旧版优先、新版兜底**:先读取 `localStorage.user` 并以
+  `/api/user/self` 验证旧 session; 本地用户缺失/无效或旧验证返回 401 时,才调
   `POST /api/user/auth/refresh` 获取新版 Dashboard Bearer token。短期 Dashboard
   token 仅在脚本内存中用于同源 new-api 请求,最终保存到囤囤鼠的是
   `/api/user/token` 新生成的长期 access token。已录入判定会用 origin/userId
@@ -539,31 +545,31 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   -1`(**必须显式传 -1**,零值 0 会被 new-api
   当作已过期)的 `DEFAULT` 密钥;全程 best-effort,且只回传
   siteId/userId/accessToken,**不回传 APIKey**(由后端 同步拉取)。
-- **上游账号 PAT 免登**:工具栏「免登脚本」安装公开的
-  `/tuntunshu-login.user.js`(`lib/upstream_login_userscript.ts`,脚本版本
-  `1.0.0`), 账号行「登录」渲染为真实
+- **上游账号 PAT 免登**:账号行「登录」渲染为真实
   `<a target="_blank"
   rel="noopener noreferrer">`:仅当当前页检测到脚本同步暴露的
-  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "1.0.0"`
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.0"`
   (`buildAccountLoginHref`)时才把
   `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...` 写入
   href,交给浏览器原生新标签打开(支持中键/右键复制链接);未安装或版本不符时
-  **不得把 PAT 放入 URL**(href 留空),点击弹出「未检测到免登脚本」分步引导
+  **不得把 PAT 放入 URL**(href 留空),点击弹出「未检测到囤囤鼠脚本」分步引导
   弹窗(`LoginScriptModal`:第一步安装脚本 → 第二步刷新本页 → 第三步重试
-  登录),弹窗与工具栏均提供安装入口。账号列表额外返回 `site_origin`
+  登录),弹窗与工具栏都指向同一个安装 URL。账号列表额外返回 `site_origin`
   供登录使用(仍保留裸 `site_id`),避免站点分页尚未加载时无法登录;
   站点必须是无路径、查询、fragment 或 URL 用户信息的纯 `http(s)`
   origin。新标签以 `noopener,noreferrer` 打开,脚本以最终页面的 `location.origin`
   为准。
-- 免登脚本在 `document-start` 把 fragment 凭据转存为当前标签的
-  `sessionStorage["tts-upstream-login"]`,同步清 fragment 并停掉首次页面加载。
-  它先用不带 PAT 的新/旧 logout 清原 Cookie session 和共享
-  `localStorage.user/uid`,再以 `credentials:"omit"` +
-  `Authorization: Bearer <accessToken>` + `New-Api-User: <userId>` 请求
-  `/api/user/self`;仅业务成功且返回用户 ID 一致时激活并 reload,失败一律清状态。
-  active 状态在刷新后恢复,关闭标签后随 sessionStorage 消失;同 origin
+- 脚本在 `document-start` 把 fragment 凭据转存为当前标签的
+  `sessionStorage["tts-upstream-login"]`,同步清 fragment 并停掉首次页面加载,
+  同时把小胶囊切到分步进度(`退出登录态…` → `验证令牌…`)。它先用不带 PAT 的 新/旧
+  logout 清原 Cookie session 和共享 `localStorage.user/uid`,再以
+  `credentials:"omit"` + `Authorization: Bearer <accessToken>` +
+  `New-Api-User: <userId>` 请求 `/api/user/self`;仅业务成功且返回用户 ID 一致时
+  激活并**自动跳转 `<origin>/profile`**,失败一律清状态。 active
+  状态在刷新后恢复,关闭标签后随 sessionStorage 消失;同 origin
   的其他普通登录标签会被一并登出,复制标签/浏览器会话恢复可能复制凭据,HTTP
-  上游会显示明文风险警告。
+  上游会以胶囊 tooltip 提示明文风险。免登激活页同样先把小胶囊切到
+  「注入免登拦截…」,再展示「免登中(用户名)」。
 - 脚本只覆写当前页面 realm 的同 origin `/api/*` fetch/XHR,覆盖页面自带的两项
   鉴权头;fetch 普通 API 强制 `credentials:"omit"`,XHR 则依赖启动阶段先清除
   Cookie(浏览器无法禁止同源 XHR 携带之后重新产生的 Cookie)。外域、静态资源与
@@ -577,7 +583,8 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   专属功能不受支持;WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch
   与其他 realm 也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
   时会立即删除免登状态并停用当前页补丁,避免 SPA 同页重新登录后仍误用旧
-  PAT;退出统一导航旧版兼容路径 `/login`(新版会自行重定向到 `/sign-in`)。
+  PAT;点击小胶囊的「免登中(用户名)」并 confirm 后统一退出,导航旧版兼容路径
+  `/login`(新版会自行重定向到 `/sign-in`)。
 - **ModelsApp** 通道弹窗有一个真实代理往返测试(`POST /v1/chat/completions`)。
 - **SettingsApp** 的「浏览器自动签到」区可立即启停 fallback、设置 30–120 秒总
   超时,并经 `GET /api/checkin-automation/status` 展示 CloakBrowser wrapper /
@@ -595,11 +602,13 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 
 - `lib/pagination_test.ts`:分页参数与响应形状。
 - `lib/sse_test.ts`:SSE usage 嗅探、跨分片重组、无 usage 时返回 null。
-- `lib/userscript_test.ts`:用轻量浏览器 mock 执行生成脚本,覆盖新旧 new-api
-  鉴权顺序、401 fallback、Bearer 隔离、分页已录入判定、录入与取消覆盖。
-- `lib/upstream_login_userscript_test.ts`:覆盖免登脚本元数据与普通页面无副作用、
-  fragment 两阶段启动、logout 与 `/self` 校验、sessionStorage/Storage shadow、
-  fetch/XHR 同源注入及外域隔离、新版 AuthBundle、禁止 PAT 轮换与退出清理,以及
+- `lib/userscript_test.ts`:用轻量浏览器 mock 执行合并后的「囤囤鼠脚本」,覆盖
+  元数据/胶囊文案、新旧 new-api 鉴权顺序、401 fallback、Bearer 隔离、分页已录入
+  判定、录入与取消覆盖。
+- `lib/upstream_login_userscript_test.ts`:覆盖免登 runtime 普通页面无副作用、
+  fragment 两阶段启动与跳转 `/profile`、logout 与 `/self` 校验、
+  sessionStorage/Storage shadow、fetch/XHR 同源注入及外域隔离、新版 AuthBundle、
+  禁止 PAT 轮换与退出清理、合并脚本小胶囊的免登状态/confirm 退出/分步进度,以及
   CloakBrowser memory-only bootstrap 不把凭据写入 URL/Storage。
 - `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
   HTTP(S) origin 校验、fragment 凭据编码,以及登录链接仅在脚本就绪且 Origin
@@ -670,9 +679,9 @@ Fresh
   `CLOAKBROWSER_SUPPRESS_FONT_WARNING` 隐藏问题；字体受授权约束,应由部署环境合法
   提供并在目标站实测,当前仓库不捆绑微软字体。
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
-  `?key=`。错误 key 装出的脚本调 API 会 401。
-- `GET /tuntunshu-login.user.js` 同样无鉴权,但源码只包含通用免登逻辑和自身
-  安装/更新 URL;PAT/userId 仅在页面检测到免登脚本后,才进入账号「登录」链接 href
-  的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
-- 版本号:UI 页脚/登录页显示 `v1.5.0`,快捷录入油猴脚本独立 `@version 1.3.2`,
-  上游免登油猴脚本独立 `@version 1.0.0`;`deno.json` 无 version 字段。
+  `?key=`。错误 key 装出的脚本调 API 会 401。合并后只保留这一个脚本路由。
+- 脚本源码包含通用免登逻辑与自身安装/更新 URL;PAT/userId 仅在页面检测到脚本
+  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.0"`)后,才进入账号
+  「登录」链接 href 的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
+- 版本号:UI 页脚/登录页显示 `v1.5.0`,合并后的「囤囤鼠脚本」独立
+  `@version 2.0.0`;`deno.json` 无 version 字段。

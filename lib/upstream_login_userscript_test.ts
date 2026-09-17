@@ -1,7 +1,8 @@
 import {
   buildUpstreamAutomationInitScript,
-  buildUpstreamLoginUserScript,
+  buildUpstreamLoginRuntimeSource,
 } from "./upstream_login_userscript.ts";
+import { buildUserScript } from "./userscript.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -527,6 +528,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
     crypto,
     console,
     queueMicrotask,
+    confirm: () => true,
+    GM_xmlhttpRequest(): void {},
     setTimeout(callback: () => void, delay = 0): number {
       if (delay < 1_000) queueMicrotask(callback);
       return 1;
@@ -542,9 +545,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   sandbox.top = sandbox;
   sandbox.globalThis = sandbox;
 
-  const source = options.source ?? buildUpstreamLoginUserScript({
-    baseUrl: "https://tuntunshu.example",
-  });
+  const source = options.source ?? buildUpstreamLoginRuntimeSource();
   const run = new Function(
     "sandbox",
     `with (sandbox) {\n${source}\n}`,
@@ -585,25 +586,7 @@ async function sendXhr(xhr: FakeXhrLike): Promise<void> {
   await loaded;
 }
 
-Deno.test("upstream login userscript 元数据正确且普通页面保持惰性", async () => {
-  const source = buildUpstreamLoginUserScript({
-    baseUrl: "https://tuntunshu.example/",
-  });
-  for (
-    const directive of [
-      "// @version      1.0.0",
-      "// @match        http://*/*",
-      "// @match        https://*/*",
-      "// @grant        none",
-      "// @inject-into  page",
-      "// @run-at       document-start",
-      "// @noframes",
-      "https://tuntunshu.example/tuntunshu-login.user.js",
-    ]
-  ) {
-    assert(source.includes(directive), `missing metadata: ${directive}`);
-  }
-
+Deno.test("upstream login runtime 普通页面保持惰性", async () => {
   const harness = createHarness();
   const originalFetch = harness.sandbox.fetch;
   const Xhr = harness.sandbox.XMLHttpRequest as { prototype: object };
@@ -614,7 +597,7 @@ Deno.test("upstream login userscript 元数据正确且普通页面保持惰性"
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "1.0.0",
+    "2.0.0",
     "script marker mismatch",
   );
   assert(harness.sandbox.fetch === originalFetch, "inert page patched fetch");
@@ -661,8 +644,9 @@ Deno.test("upstream login userscript 同步清理 fragment 并完成两阶段启
   assertEquals(harness.getStopCount(), 1, "page startup was not stopped");
 
   await waitUntil(
-    () => harness.getReloadCount() === 1,
-    "validated login did not reload",
+    () =>
+      harness.navigations.some((url) => new URL(url).pathname === "/profile"),
+    "validated login did not navigate to /profile",
   );
   const active = readSession(harness);
   assertEquals(active?.phase, "active", "login did not become active");
@@ -719,7 +703,11 @@ Deno.test("upstream login userscript 仅在新版 logout 不存在时回退旧�
   const fragment = "#__tts_upstream_login__?accessToken=pat&userId=7";
   const harness = createHarness({ hash: fragment, logoutStatus: 404 });
   harness.execute();
-  await waitUntil(() => harness.getReloadCount() === 1, "legacy flow failed");
+  await waitUntil(
+    () =>
+      harness.navigations.some((url) => new URL(url).pathname === "/profile"),
+    "legacy flow failed",
+  );
 
   assertEquals(
     harness.fetchCalls.map((call) => [call.method, call.path]),
@@ -743,7 +731,11 @@ Deno.test("upstream login userscript logout 或 self 校验失败时 fail closed
   const logoutFailure = createHarness({ hash: fragment, logoutStatus: 500 });
   logoutFailure.execute();
   await settle();
-  assertEquals(logoutFailure.getReloadCount(), 0, "failed logout reloaded");
+  assertEquals(
+    logoutFailure.navigations.length,
+    0,
+    "failed logout navigated",
+  );
   assertEquals(
     logoutFailure.fetchCalls.map((call) => call.path),
     ["/api/user/auth/logout"],
@@ -778,7 +770,7 @@ Deno.test("upstream login userscript logout 或 self 校验失败时 fail closed
   });
   mismatch.execute();
   await settle();
-  assertEquals(mismatch.getReloadCount(), 0, "mismatched user reloaded");
+  assertEquals(mismatch.navigations.length, 0, "mismatched user navigated");
   assertEquals(
     mismatch.sessionStorage.getItem(SESSION_KEY),
     null,
@@ -1169,37 +1161,33 @@ Deno.test("upstream login userscript XHR refresh 失败时主动停用免登", a
   );
 });
 
-Deno.test("upstream login userscript 浮条展示限制并清理退出状态", async () => {
+Deno.test("合并脚本在小胶囊里展示免登状态并 confirm 后退出", async () => {
   const harness = createHarness({
     storedSession: activeSession("http://new-api.example"),
     protocol: "http:",
+    source: buildUserScript({
+      baseUrl: "https://tuntunshu.example",
+      authKey: "tts-secret",
+    }),
   });
   harness.execute();
   await settle();
 
-  const pageText = elementText(harness.document.body);
-  assert(pageText.includes("囤囤鼠 PAT 免登"), "login banner was not rendered");
-  assert(pageText.includes("alice") && pageText.includes("#7"), "user missing");
-  assert(
-    pageText.includes("Session") && pageText.includes("Passkey"),
-    "session-only limitations were not disclosed",
+  const capsule = findElement(
+    harness.document.body,
+    (element) => element.tagName.toLowerCase() === "button",
   );
+  assert(capsule, "免登小胶囊按钮缺失");
+  const pageText = elementText(capsule);
   assert(
-    pageText.includes("HTTP") || pageText.includes("明文"),
-    "HTTP warning missing",
+    pageText.includes("免登中") && pageText.includes("alice"),
+    `胶囊未展示免登中(用户名): ${pageText}`,
   );
 
-  const exit = findElement(
-    harness.document.body,
-    (element) =>
-      element.tagName.toLowerCase() === "button" &&
-      elementText(element).includes("退出"),
-  );
-  assert(exit, "login banner exit button missing");
-  exit.dispatch("click");
+  capsule.dispatch("click");
   await waitUntil(
     () => harness.navigations.some((url) => new URL(url).pathname === "/login"),
-    "exit did not navigate to the cross-version login path",
+    "退出免登未导航到跨版本登录路径",
   );
   assertEquals(
     harness.sessionStorage.getItem(SESSION_KEY),
@@ -1212,6 +1200,41 @@ Deno.test("upstream login userscript 浮条展示限制并清理退出状态", a
   assert(logout, "exit did not attempt logout");
   assertEquals(logout.credentials, "include", "exit logout omitted cookies");
   assert(!logout.headers.authorization, "exit logout leaked the PAT");
+});
+
+Deno.test("合并脚本把免登前置步骤写进小胶囊并跳转 /profile", async () => {
+  const fragment = "#__tts_upstream_login__?" + new URLSearchParams({
+    accessToken: PAT,
+    userId: USER_ID,
+  });
+  const harness = createHarness({
+    hash: fragment,
+    source: buildUserScript({
+      baseUrl: "https://tuntunshu.example",
+      authKey: "tts-secret",
+    }),
+  });
+
+  harness.execute();
+  // bootstrapFromFragment 在首个 await 之前同步写入首个进度步骤。
+  const capsule = findElement(
+    harness.document.body,
+    (element) => element.tagName.toLowerCase() === "button",
+  );
+  assert(capsule, "免登进度小胶囊按钮缺失");
+  assert(
+    elementText(capsule).includes("退出登录态"),
+    `首个免登进度未写入胶囊: ${elementText(capsule)}`,
+  );
+
+  await waitUntil(
+    () =>
+      harness.navigations.some((url) => new URL(url).pathname === "/profile"),
+    "免登完成后未跳转 /profile",
+  );
+  const active = readSession(harness);
+  assertEquals(active?.phase, "active", "login did not become active");
+  assertEquals(active?.user, USER, "verified user was not persisted");
 });
 
 Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", async () => {
@@ -1236,7 +1259,7 @@ Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", asyn
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "1.0.0",
+    "2.0.0",
     "automation runtime marker mismatch",
   );
   for (

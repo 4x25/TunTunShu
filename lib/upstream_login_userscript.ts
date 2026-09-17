@@ -1,27 +1,3 @@
-/** Generate the standalone Violentmonkey upstream PAT-login userscript. */
-export function buildUpstreamLoginUserScript(
-  opts: { baseUrl: string },
-): string {
-  const base = opts.baseUrl.replace(/\/+$/, "");
-  const installUrl = `${base}/tuntunshu-login.user.js`;
-
-  return `// ==UserScript==
-// @name         囤囤鼠 · 上游账号免登
-// @namespace    tuntunshu
-// @version      1.0.0
-// @description  使用囤囤鼠保存的 PAT 在当前标签打开 new-api 后台
-// @match        http://*/*
-// @match        https://*/*
-// @grant        none
-// @inject-into  page
-// @run-at       document-start
-// @noframes
-// @updateURL    ${installUrl}
-// @downloadURL  ${installUrl}
-// ==/UserScript==
-${buildUpstreamLoginRuntimeSource()}`;
-}
-
 export interface UpstreamAutomationBootstrap {
   origin: string;
   accessToken: string;
@@ -73,13 +49,25 @@ if (globalThis.top === globalThis && location.origin === ${
 ${buildUpstreamLoginRuntimeSource()}`;
 }
 
-/** 免登油猴脚本与 CloakBrowser automation 共用的页面鉴权 runtime。 */
+/** 「囤囤鼠脚本」与 CloakBrowser automation 共用的页面鉴权 runtime。 */
 export function buildUpstreamLoginRuntimeSource(): string {
   return `(function () {
   "use strict";
 
-  var SCRIPT_VERSION = "1.0.0";
+  // 页面 realm:Violentmonkey 的 @inject-into page 下 unsafeWindow === window;
+  // Tampermonkey 等沙箱环境下 unsafeWindow 才指向真正的页面 window。
+  var PAGE = (typeof unsafeWindow !== "undefined" && unsafeWindow)
+    ? unsafeWindow
+    : globalThis;
+
+  var SCRIPT_VERSION = "2.0.0";
   var MARKER = "__TTS_UPSTREAM_LOGIN_SCRIPT__";
+  // 合并后的「囤囤鼠脚本」会注入 TTS_UPSTREAM_UI,用于把退出现有登录态、
+  // 验证令牌等步骤的进度显示到页面小胶囊按钮;CloakBrowser automation 没有该
+  // 对象时保持纯后台行为。
+  var ui = (typeof TTS_UPSTREAM_UI !== "undefined" && TTS_UPSTREAM_UI)
+    ? TTS_UPSTREAM_UI
+    : null;
   var PATCHED = "__TTS_UPSTREAM_LOGIN_PATCHED__";
   var SESSION_KEY = "tts-upstream-login";
   var FRAGMENT_PREFIX = "#__tts_upstream_login__?";
@@ -88,11 +76,11 @@ export function buildUpstreamLoginRuntimeSource(): string {
   var NEW_API_USER = "new-api-user";
   var AUTH_SESSION = "x-auth-session";
 
-  globalThis[MARKER] = SCRIPT_VERSION;
+  PAGE[MARKER] = SCRIPT_VERSION;
 
-  var nativeFetch = globalThis.fetch && globalThis.fetch.bind(globalThis);
-  var NativeXHR = globalThis.XMLHttpRequest;
-  var NativeStorage = globalThis.Storage;
+  var nativeFetch = PAGE.fetch && PAGE.fetch.bind(PAGE);
+  var NativeXHR = PAGE.XMLHttpRequest;
+  var NativeStorage = PAGE.Storage;
   if (!nativeFetch || !NativeXHR || !NativeStorage) return;
 
   var storageProto = NativeStorage.prototype;
@@ -159,8 +147,8 @@ export function buildUpstreamLoginRuntimeSource(): string {
   }
 
   function makeNonce() {
-    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
-      return globalThis.crypto.randomUUID();
+    if (PAGE.crypto && typeof PAGE.crypto.randomUUID === "function") {
+      return PAGE.crypto.randomUUID();
     }
     return String(Date.now()) + "-" + Math.random().toString(36).slice(2);
   }
@@ -247,13 +235,13 @@ export function buildUpstreamLoginRuntimeSource(): string {
     if (typeof location.hash !== "string" ||
       location.hash.indexOf(FRAGMENT_PREFIX) !== 0) return false;
 
-    var params = new URLSearchParams(location.hash.slice(FRAGMENT_PREFIX.length));
+    var params = new PAGE.URLSearchParams(location.hash.slice(FRAGMENT_PREFIX.length));
     var accessToken = params.get("accessToken") || "";
     var userId = params.get("userId") || "";
     if (!validToken(accessToken) || !validUserId(userId)) {
       cleanFragment();
       sessionRemove();
-      globalThis.stop();
+      PAGE.stop();
       renderFailure("登录参数无效");
       return true;
     }
@@ -272,19 +260,22 @@ export function buildUpstreamLoginRuntimeSource(): string {
       sessionSet(pending);
     } catch (_) {
       cleanFragment();
-      globalThis.stop();
+      PAGE.stop();
       renderFailure("浏览器拒绝使用 sessionStorage");
       return true;
     }
 
     cleanFragment();
-    globalThis.stop();
+    PAGE.stop();
 
     (async function () {
       try {
+        // 分步展示免登前的准备动作(和快捷录入共用同一个小胶囊进度条)。
+        if (ui) ui.progress("退出登录态…", 20);
         await clearServerLogin();
         nativeStorageRemove.call(localStorage, "user");
         nativeStorageRemove.call(localStorage, "uid");
+        if (ui) ui.progress("验证令牌…", 60);
         var user = await requestSelf(accessToken, userId);
         sessionSet({
           version: 1,
@@ -296,18 +287,21 @@ export function buildUpstreamLoginRuntimeSource(): string {
           tabNonce: makeNonce(),
           createdAt: pending.createdAt,
         });
-        location.reload();
+        if (ui) ui.progress("免登完成", 100);
+        // 免登完成后直接进入个人中心。
+        location.replace(location.origin + "/profile");
       } catch (error) {
         sessionRemove();
+        if (ui) ui.fail(error && error.message ? error.message : error);
         renderFailure(error && error.message ? error.message : error);
       }
     })();
     return true;
   }
 
-  var automation = globalThis.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__;
-  try { delete globalThis.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__; } catch (_) {
-    globalThis.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__ = undefined;
+  var automation = PAGE.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__;
+  try { delete PAGE.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__; } catch (_) {
+    PAGE.__TTS_UPSTREAM_AUTOMATION_BOOTSTRAP__ = undefined;
   }
   var memoryOnly = !!automation;
   var login;
@@ -331,7 +325,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
   } else {
     if (bootstrapFromFragment()) return;
     login = readStoredSession();
-    if (globalThis.opener) {
+    if (PAGE.opener) {
       sessionRemove();
       return;
     }
@@ -340,8 +334,8 @@ export function buildUpstreamLoginRuntimeSource(): string {
     if (sessionGet()) sessionRemove();
     return;
   }
-  if (globalThis[PATCHED]) return;
-  globalThis[PATCHED] = true;
+  if (PAGE[PATCHED]) return;
+  PAGE[PATCHED] = true;
 
   var shadowUser = JSON.stringify(login.user);
   var shadowUid = login.userId;
@@ -444,14 +438,14 @@ export function buildUpstreamLoginRuntimeSource(): string {
   }
 
   function authHeaders(input) {
-    var headers = new Headers(input);
+    var headers = new PAGE.Headers(input);
     headers.set("Authorization", "Bearer " + login.accessToken);
     headers.set("New-Api-User", login.userId);
     return headers;
   }
 
   function stripAuthHeaders(input) {
-    var headers = new Headers(input);
+    var headers = new PAGE.Headers(input);
     headers.delete("Authorization");
     headers.delete("New-Api-User");
     headers.delete("X-Auth-Session");
@@ -483,7 +477,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
   }
 
   function blockedPatResponse() {
-    return new Response(JSON.stringify({
+    return new PAGE.Response(JSON.stringify({
       success: false,
       message: "囤囤鼠 PAT 免登模式禁止旋转 AccessToken",
     }), {
@@ -498,13 +492,13 @@ export function buildUpstreamLoginRuntimeSource(): string {
       login.user = user;
       shadowUser = JSON.stringify(user);
       if (!memoryOnly) sessionSet(login);
-      return new Response(JSON.stringify(createAuthBundle(user)), {
+      return new PAGE.Response(JSON.stringify(createAuthBundle(user)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
       deactivateLogin();
-      return new Response(JSON.stringify({
+      return new PAGE.Response(JSON.stringify({
         success: false,
         code: "AUTH_UNAUTHORIZED",
         message: error && error.message ? error.message : "AccessToken 无效",
@@ -515,10 +509,10 @@ export function buildUpstreamLoginRuntimeSource(): string {
     }
   }
 
-  globalThis.fetch = function (input, init) {
+  PAGE.fetch = function (input, init) {
     if (!loginEnabled) return nativeFetch(input, init);
-    var request = input instanceof Request ? input : null;
-    var target = new URL(request ? request.url : String(input), location.href);
+    var request = input instanceof PAGE.Request ? input : null;
+    var target = new PAGE.URL(request ? request.url : String(input), location.href);
     if (!isSameOriginApi(target)) return nativeFetch(input, init);
 
     if (isPatRotation(target)) return Promise.resolve(blockedPatResponse());
@@ -538,7 +532,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
     }
 
     if (request) {
-      return nativeFetch(new Request(request, next));
+      return nativeFetch(new PAGE.Request(request, next));
     }
     return nativeFetch(input, next);
   };
@@ -585,7 +579,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
 
   xhrProto.open = function (method, url) {
     clearOwnResponse(this);
-    var target = new URL(String(url), location.href);
+    var target = new PAGE.URL(String(url), location.href);
     if (!loginEnabled) {
       xhrState.set(this, { api: false });
       return nativeXhrOpen.apply(this, arguments);
@@ -741,35 +735,14 @@ export function buildUpstreamLoginRuntimeSource(): string {
     })();
   }
 
-  function renderBanner() {
-    if (!document.body || document.getElementById &&
-      document.getElementById("__tts_upstream_login_bar")) return;
-    var bar = document.createElement("div");
-    bar.id = "__tts_upstream_login_bar";
-    bar.style.cssText = "position:fixed;right:14px;bottom:14px;z-index:2147483647;" +
-      "max-width:360px;padding:10px 12px;border-radius:10px;background:#111827;" +
-      "color:#fff;font:12px/1.45 system-ui;box-shadow:0 6px 24px #0005";
-    var title = document.createElement("div");
-    title.textContent = "囤囤鼠 PAT 免登 · " + login.user.username +
-      " (#" + login.userId + ")";
-    title.style.cssText = "font-weight:700;margin-bottom:3px";
-    var note = document.createElement("div");
-    note.textContent = "Session、2FA、Passkey、Playground 等真实登录功能不可用" +
-      (location.protocol === "http:" ? " · HTTP 明文传输" : "");
-    note.style.cssText = "opacity:.8;margin-right:48px";
-    var button = document.createElement("button");
-    button.type = "button";
-    button.textContent = "退出";
-    button.style.cssText = "position:absolute;right:10px;top:10px;border:0;border-radius:6px;" +
-      "padding:4px 8px;cursor:pointer;background:#ef4444;color:#fff";
-    button.addEventListener("click", exitLogin);
-    bar.append(title, note, button);
-    document.body.appendChild(bar);
-  }
-
-  if (!memoryOnly) {
-    if (document.body) renderBanner();
-    else document.addEventListener("DOMContentLoaded", renderBanner, { once: true });
+  // 合并脚本下,免登状态由页面小胶囊按钮呈现:先展示「注入免登拦截…」步骤,
+  // 再切为「免登中(用户名)」,点击后 confirm 确认再退出。
+  // 单独注入 automation 时没有 ui,保持纯后台。
+  if (!memoryOnly && ui) {
+    ui.progress("注入免登拦截…", 80);
+    setTimeout(function () {
+      if (loginEnabled) ui.activate(login.user, exitLogin);
+    }, 0);
   }
 })();
 `;

@@ -80,6 +80,7 @@ interface Harness {
   ttsCalls: BrowserCall[];
   lockNames: string[];
   getConfirmCount: () => number;
+  getCapsuleLabel: () => string;
   click: () => Promise<void>;
 }
 
@@ -331,6 +332,9 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
     ttsCalls,
     lockNames,
     getConfirmCount: () => confirmCount,
+    // 小胶囊文案在 label span 上;toast 用的是 div,不会误取。
+    getCapsuleLabel: () =>
+      created.find((element) => element.tagName === "span")?.textContent ?? "",
     async click() {
       button.dispatch("click");
       await waitUntil(
@@ -349,7 +353,17 @@ Deno.test("userscript 优先使用有效的旧版 localStorage 登录态", async
   const harness = await createHarness({
     localUser: JSON.stringify({ id: 7, username: "legacy" }),
   });
+  assertEquals(
+    harness.getCapsuleLabel(),
+    "快捷录入",
+    "idle capsule label mismatch",
+  );
   await harness.click();
+  assertEquals(
+    harness.getCapsuleLabel(),
+    "快捷录入",
+    "capsule did not return to idle after quick entry",
+  );
 
   assert(
     !harness.browserCalls.some((call) =>
@@ -516,11 +530,30 @@ Deno.test("userscript 精确过滤并逐页查找已录入账号", async () => {
   );
 });
 
-Deno.test("userscript 版本升级且生成结果保持可执行", () => {
+Deno.test("合并后的囤囤鼠脚本元数据与胶囊文案正确且可执行", () => {
   const source = buildUserScript({
     baseUrl: "https://tuntunshu.example",
     authKey: 'quote"key',
   });
-  assert(source.includes("// @version      1.3.2"), "version was not bumped");
+  for (
+    const directive of [
+      "// @name         囤囤鼠脚本",
+      "// @version      2.0.0",
+      "// @match        *://*/*",
+      "// @grant        GM_xmlhttpRequest",
+      "// @connect      tuntunshu.example",
+      "// @inject-into  page",
+      "// @run-at       document-start",
+      "// @noframes",
+      "https://tuntunshu.example/tuntunshu.user.js?key=quote%22key",
+    ]
+  ) {
+    assert(source.includes(directive), `missing metadata: ${directive}`);
+  }
+  // 胶囊文案:空闲态「快捷录入」、免登态「免登中(用户名)」,以及分步进度。
+  assert(source.includes('"快捷录入"'), "快捷录入 capsule label missing");
+  assert(source.includes('"免登中（"'), "免登中 capsule label missing");
+  assert(source.includes("退出登录态…"), "免登 progress step missing");
+  assert(source.includes("注入免登拦截…"), "hijack progress step missing");
   new Function(source);
 });

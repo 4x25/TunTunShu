@@ -63,7 +63,7 @@ Deno.test("upstream login marker 必须精确匹配脚本版本", () => {
   assert(!isUpstreamLoginScriptInstalled(scope), "missing marker accepted");
   Reflect.set(scope, UPSTREAM_LOGIN_SCRIPT_MARKER, "0.9.0");
   assert(!isUpstreamLoginScriptInstalled(scope), "stale marker accepted");
-  Reflect.set(scope, UPSTREAM_LOGIN_SCRIPT_MARKER, "1.0.0");
+  Reflect.set(scope, UPSTREAM_LOGIN_SCRIPT_MARKER, "2.0.0");
   assert(isUpstreamLoginScriptInstalled(scope), "current marker rejected");
 });
 

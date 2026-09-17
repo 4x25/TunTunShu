@@ -20,7 +20,6 @@ import { UpstreamModelColumn } from "../components/upstream/UpstreamModelColumn.
 import {
   buildAccountLoginHref,
   isUpstreamLoginScriptInstalled,
-  UPSTREAM_LOGIN_SCRIPT_PATH,
 } from "../components/upstream/upstream_login.ts";
 import { UpstreamToolbar } from "../components/upstream/UpstreamToolbar.tsx";
 import { useResourceDialogs } from "../components/upstream/use_resource_dialogs.ts";
@@ -574,12 +573,12 @@ export default function UpstreamApp() {
     void reloadScope("all").catch((e) =>
       showFlash(e instanceof Error ? e.message : "刷新失败", false)
     );
-  const quickEntry = () => {
-    const url = `/tuntunshu.user.js?key=${encodeURIComponent(getToken())}`;
-    globalThis.open(url, "_blank");
-  };
-  const installLoginScript = () => {
-    openDetached(UPSTREAM_LOGIN_SCRIPT_PATH);
+  const quickEntryUrl = `/tuntunshu.user.js?key=${
+    encodeURIComponent(getToken())
+  }`;
+  // 合并后的「囤囤鼠脚本」同时承担快捷录入与上游免登,只有一个安装入口。
+  const installScript = () => {
+    openDetached(quickEntryUrl);
   };
   // 免登脚本的 marker 在 document-start 注入,页面存续期内不会变化;
   // 脚本未就绪时绝不把 PAT 写进「登录」链接的 href。
@@ -615,8 +614,7 @@ export default function UpstreamApp() {
         busy={busy}
         onRefresh={refreshAll}
         onReset={resetAll}
-        onInstallLoginScript={installLoginScript}
-        onQuickEntry={quickEntry}
+        onInstallScript={installScript}
       />
 
       <div class="miller">
@@ -738,6 +736,7 @@ export default function UpstreamApp() {
       <LoginScriptModal
         open={loginHelpOpen}
         onClose={() => setLoginHelpOpen(false)}
+        installHref={quickEntryUrl}
       />
     </>
   );

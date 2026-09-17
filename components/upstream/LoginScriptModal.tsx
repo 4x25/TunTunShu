@@ -1,20 +1,24 @@
 import { IconClose } from "../icons.tsx";
 import { Modal } from "../Modal.tsx";
-import {
-  UPSTREAM_LOGIN_SCRIPT_PATH,
-  UPSTREAM_LOGIN_SCRIPT_VERSION,
-} from "./upstream_login.ts";
+import { UPSTREAM_LOGIN_SCRIPT_VERSION } from "./upstream_login.ts";
 
-/** 账号行「登录」在未检测到免登脚本时弹出的分步引导。 */
+/**
+ * 账号行「登录」在未检测到「囤囤鼠脚本」时弹出的分步引导。
+ * 合并后只保留一份脚本,`installHref` 由调用方带上授权 key。
+ */
 export function LoginScriptModal(
-  { open, onClose }: { open: boolean; onClose: () => void },
+  { open, onClose, installHref }: {
+    open: boolean;
+    onClose: () => void;
+    installHref: string;
+  },
 ) {
   return (
     <Modal open={open} onClose={onClose}>
       {open && (
         <>
           <div class="modal-head">
-            <h3>未检测到免登脚本</h3>
+            <h3>未检测到囤囤鼠脚本</h3>
             <button
               type="button"
               class="icon-btn"
@@ -26,13 +30,13 @@ export function LoginScriptModal(
           </div>
           <div class="modal-body">
             <p class="page-sub" style="margin:0">
-              由于当前页面未检测到「上游免登」油猴脚本，账号「登录」暂时无法免密跳转到上游站点，请按以下步骤操作：
+              由于当前页面未检测到「囤囤鼠脚本」，账号「登录」暂时无法免密跳转到上游站点，请按以下步骤操作：
             </p>
             <ol class="steps">
               <li>
                 <b>
                   第一步
-                </b>：点击下方「安装免登脚本」，在浏览器油猴扩展中确认安装；
+                </b>：点击下方「安装囤囤鼠脚本」，在浏览器油猴扩展中确认安装；
               </li>
               <li>
                 <b>第二步</b>：回到囤囤鼠本页并刷新，让脚本注入页面；
@@ -45,7 +49,8 @@ export function LoginScriptModal(
             </ol>
             <p class="page-sub" style="margin:0">
               若已安装仍看到此提示，请确认脚本已启用且版本为{" "}
-              {UPSTREAM_LOGIN_SCRIPT_VERSION}，然后刷新本页。
+              {UPSTREAM_LOGIN_SCRIPT_VERSION}，然后刷新本页。该脚本同时提供
+              new-api 站点的「快捷录入」。
             </p>
           </div>
           <div class="modal-foot">
@@ -54,11 +59,11 @@ export function LoginScriptModal(
             </button>
             <a
               class="btn btn-primary"
-              href={UPSTREAM_LOGIN_SCRIPT_PATH}
+              href={installHref}
               target="_blank"
               rel="noopener noreferrer"
             >
-              安装免登脚本
+              安装囤囤鼠脚本
             </a>
           </div>
         </>

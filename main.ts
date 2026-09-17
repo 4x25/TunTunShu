@@ -1,7 +1,6 @@
 import { App, staticFiles } from "fresh";
 import { define, type State } from "./utils.ts";
 import { initializeDatabase } from "./db/init.ts";
-import { buildUpstreamLoginUserScript } from "./lib/upstream_login_userscript.ts";
 import { buildUserScript } from "./lib/userscript.ts";
 import { getSettings } from "./services/settings_service.ts";
 import { runAccountCheckinJob } from "./jobs/account_checkin_job.ts";
@@ -14,26 +13,13 @@ export const app = new App<State>();
 
 app.use(staticFiles());
 
-// 服务两个公开油猴脚本:快捷录入脚本注入对外 base URL 与 ?key=;
-// 上游免登脚本只注入自身安装/更新 URL,不包含 AUTH_KEY 或任何账号凭据。
+// 服务合并后的公开油猴脚本「囤囤鼠脚本」:注入对外 base URL 与 ?key=。
 app.use(define.middleware((ctx) => {
   const url = new URL(ctx.req.url);
   const proto = ctx.req.headers.get("x-forwarded-proto") ??
     url.protocol.replace(":", "");
   const host = ctx.req.headers.get("x-forwarded-host") ?? url.host;
   const baseUrl = `${proto}://${host}`;
-
-  if (
-    ctx.req.method === "GET" &&
-    url.pathname === "/tuntunshu-login.user.js"
-  ) {
-    return new Response(buildUpstreamLoginUserScript({ baseUrl }), {
-      headers: {
-        "Content-Type": "text/javascript; charset=utf-8",
-        "Cache-Control": "no-cache",
-      },
-    });
-  }
 
   if (ctx.req.method === "GET" && url.pathname === "/tuntunshu.user.js") {
     const authKey = url.searchParams.get("key") ?? "";

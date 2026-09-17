@@ -7,15 +7,13 @@ export function UpstreamToolbar(
     busy,
     onRefresh,
     onReset,
-    onInstallLoginScript,
-    onQuickEntry,
+    onInstallScript,
   }: {
     flash: Flash | null;
     busy: string | null;
     onRefresh: () => void;
     onReset: () => void;
-    onInstallLoginScript: () => void;
-    onQuickEntry: () => void;
+    onInstallScript: () => void;
   },
 ) {
   return (
@@ -48,18 +46,10 @@ export function UpstreamToolbar(
         <button
           type="button"
           class="btn btn-ghost btn-sm tooltip tooltip-bottom tooltip-end"
-          data-tip="安装油猴脚本,免输密码打开 new-api 上游账号"
-          onClick={onInstallLoginScript}
+          data-tip="安装「囤囤鼠脚本」:在 new-api 站点一键录入账号,并用 PAT 免登上游后台"
+          onClick={onInstallScript}
         >
-          免登脚本
-        </button>
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm tooltip tooltip-bottom tooltip-end"
-          data-tip="安装油猴脚本,在 new-api 站点一键录入站点与账号"
-          onClick={onQuickEntry}
-        >
-          快捷录入
+          囤囤鼠脚本
         </button>
       </div>
     </div>

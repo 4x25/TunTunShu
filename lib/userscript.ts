@@ -1,22 +1,28 @@
 /**
- * 生成「囤囤鼠 · 快捷录入」油猴脚本(Tampermonkey/Violentmonkey)。
+ * 生成合并后的「囤囤鼠脚本」油猴脚本(Tampermonkey/Violentmonkey)。
+ *
+ * 它把原「快捷录入」与「上游账号免登」两个脚本合并为一份:
+ *
+ * - 页面右下角只有一个小胶囊按钮,按状态展示:
+ *   - 免登状态 → 「免登中（用户名）」,点击后 `confirm` 确认再退出免登;
+ *   - 其他状态 → 「快捷录入」,点击执行录入,过程用分步进度条展示;
+ * - 免登前置逻辑(退出现有登录态、校验令牌)与快捷录入共用同一个胶囊按钮的
+ *   分步进度(`TTS_UPSTREAM_UI.progress`);
+ * - 免登完成后自动跳转 `<origin>/profile` 个人中心。
  *
  * baseUrl 与 authKey 在安装时随链接注入:
  * - 二者用 JSON.stringify 注入为 JS 字符串字面量,防止引号截断脚本(注入安全的关键);
  * - 元数据里的 @connect / @updateURL / @downloadURL 用 hostname / encodeURIComponent 处理;
  * - 浏览器侧代码全程不用模板字符串(避免与本模板自身的 ${} 冲突),正则用 [/] 规避反斜杠。
  *
- * 脚本逻辑:在任意页面用 /api/status 甄别 new-api → 渲染右下角悬浮按钮(带进度条) →
- * 跨域(GM_xmlhttpRequest)查囤囤鼠是否已录入 → 一键保存站点 + 取 token →
- * 保存账号前确保至少 1 个 APIKey(无则按分组各建一个无限额度的 DEFAULT 密钥)→ 保存账号
- * → 调囤囤鼠签到接口签到一次(顺带验证令牌可用);
- * 已录入态点击需 confirm 确认后重新保存(后端 POST 已是 upsert,新建/重存同一链路)。
- *
- * 登录态兼容两代 new-api:
- * - 旧版优先读取 localStorage.user,并用 session cookie + New-Api-User 验证;
- * - 本地用户缺失/无效或旧 session 已失效时,才通过 /api/user/auth/refresh 获取新版
- *   Dashboard Bearer token。该短期 token 仅用于同源请求,不会保存或发给囤囤鼠。
+ * 免登 runtime 与 CloakBrowser automation 共用 `buildUpstreamLoginRuntimeSource()`,
+ * 由本脚本在小胶囊 UI 之后内联,并把 UI 暴露为 `TTS_UPSTREAM_UI` 供 runtime 调用。
  */
+import { buildUpstreamLoginRuntimeSource } from "./upstream_login_userscript.ts";
+
+/** 合并后的「囤囤鼠脚本」版本(同时作为免登 marker 版本)。 */
+export const TUNTUNSHU_SCRIPT_VERSION = "2.0.0";
+
 export function buildUserScript(
   opts: { baseUrl: string; authKey: string },
 ): string {
@@ -33,22 +39,170 @@ export function buildUserScript(
   const keyLit = JSON.stringify(opts.authKey);
 
   return `// ==UserScript==
-// @name         囤囤鼠 · 快捷录入
+// @name         囤囤鼠脚本
 // @namespace    tuntunshu
-// @version      1.3.2
-// @description  在 new-api 站点一键录入站点与账号到囤囤鼠
+// @version      ${TUNTUNSHU_SCRIPT_VERSION}
+// @description  在 new-api 站点一键录入站点与账号,并使用保存的 PAT 免登上游后台
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @connect      ${host}
+// @inject-into  page
 // @updateURL    ${installUrl}
 // @downloadURL  ${installUrl}
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // ==/UserScript==
 (function () {
   "use strict";
   var TTS_BASE = ${baseLit};
   var TTS_KEY = ${keyLit};
+
+  // ── 小胶囊按钮:免登与快捷录入唯一的页面入口 ─────────────────────
+  // 状态机: hidden(未识别 new-api) / idle(快捷录入) / busy(进行中)
+  //         / active(免登中) / failed(免登失败)
+  var TTS_UPSTREAM_UI = (function () {
+    var button = null;
+    var bar = null;
+    var label = null;
+    var mode = "hidden";
+    var activeName = "";
+    var exitHandler = null;
+    var idleHandler = null;
+
+    function hostNode() {
+      return document.body || document.documentElement || null;
+    }
+
+    function ensure() {
+      if (button || !hostNode()) return;
+      button = document.createElement("button");
+      button.type = "button";
+      button.title = "囤囤鼠脚本";
+      button.style.cssText =
+        "position:fixed;right:20px;bottom:20px;z-index:2147483647;" +
+        "overflow:hidden;padding:10px 18px;border:none;border-radius:999px;" +
+        "cursor:pointer;color:#fff;font:600 13px/1 system-ui,-apple-system," +
+        "sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);";
+      bar = document.createElement("div");
+      bar.style.cssText =
+        "position:absolute;left:0;top:0;bottom:0;width:0;z-index:0;" +
+        "background:rgba(255,255,255,.4);transition:width .3s ease;";
+      label = document.createElement("span");
+      label.style.cssText = "position:relative;z-index:1;";
+      button.appendChild(bar);
+      button.appendChild(label);
+      button.addEventListener("click", onClick);
+      hostNode().appendChild(button);
+      paint();
+    }
+
+    function paint() {
+      ensure();
+      if (!button) return;
+      if (mode === "hidden") {
+        button.style.display = "none";
+        return;
+      }
+      button.style.display = "";
+      button.disabled = mode === "busy";
+      if (mode === "idle") {
+        label.textContent = "快捷录入";
+        button.style.background = "#0a83c4";
+        bar.style.width = "0%";
+      } else if (mode === "active") {
+        label.textContent = "免登中（" + activeName + "）";
+        button.title = "囤囤鼠 PAT 免登 · " + activeName +
+          (location.protocol === "http:" ? " · HTTP 明文传输" : "");
+        button.style.background = "#16a34a";
+        bar.style.width = "0%";
+      } else if (mode === "failed") {
+        label.textContent = "免登失败";
+        button.style.background = "#dc2626";
+        bar.style.width = "0%";
+      } else {
+        // busy: 文案与进度条由 progress() 接管。
+        button.style.background = "#0a83c4";
+      }
+    }
+
+    function onClick() {
+      if (mode === "active") {
+        if (!confirm(
+          "退出免登状态?退出后将以当前账号重新登录上游," +
+            "Session、2FA、Passkey、Playground 等真实登录功能恢复可用。",
+        )) return;
+        var runExit = exitHandler;
+        exitHandler = null;
+        mode = "busy";
+        if (label) label.textContent = "退出登录态…";
+        if (bar) bar.style.width = "10%";
+        if (button) {
+          button.disabled = true;
+          button.style.background = "#0a83c4";
+        }
+        if (runExit) runExit();
+        return;
+      }
+      if (mode === "idle" && idleHandler) idleHandler();
+    }
+
+    return {
+      // 免登 runtime 校验通过:展示「免登中(用户名)」,点击回调 exitLogin。
+      activate: function (user, onExit) {
+        activeName = user && user.username
+          ? String(user.username)
+          : String((user && user.id) || "");
+        exitHandler = onExit || null;
+        mode = "active";
+        paint();
+      },
+      // 免登前置流程 / 快捷录入共用的分步进度。
+      progress: function (text, pct) {
+        mode = "busy";
+        ensure();
+        if (label) label.textContent = text;
+        if (bar) bar.style.width = (Number(pct) || 0) + "%";
+        if (button) {
+          button.disabled = true;
+          button.style.display = "";
+          button.style.background = "#0a83c4";
+        }
+      },
+      fail: function (text) {
+        mode = "failed";
+        ensure();
+        if (label) label.textContent = "免登失败";
+        if (button) {
+          button.style.display = "";
+          button.title = text ? String(text) : "囤囤鼠脚本";
+        }
+      },
+      // 识别到 new-api 且未进入免登:展示「快捷录入」。仅免登(active)优先;
+      // busy 既可能是免登前置,也可能是快捷录入自身,故允许 busy 转回 idle。
+      showIdle: function () {
+        if (mode === "active") return;
+        mode = "idle";
+        paint();
+      },
+      hide: function () {
+        if (mode === "active" || mode === "busy") return;
+        mode = "hidden";
+        paint();
+      },
+      isActive: function () {
+        return mode === "active";
+      },
+      // active 或 busy 时快捷录入必须让位(免登优先)。
+      engaged: function () {
+        return mode === "active" || mode === "busy";
+      },
+      idleClick: function (handler) {
+        idleHandler = handler;
+      },
+    };
+  })();
+
+${buildUpstreamLoginRuntimeSource()}
 
   function toast(msg, ok) {
     var t = document.createElement("div");
@@ -133,58 +287,12 @@ export function buildUserScript(
       .catch(function () { return false; });
   }
 
-  var btn = null;
-  var prog = null;
-  var lbl = null;
-  var state = { recorded: false, busy: false };
-
-  function render() {
-    btn = document.createElement("button");
-    btn.type = "button";
-    btn.title = "囤囤鼠 · 快捷录入";
-    btn.style.cssText =
-      "position:fixed;right:20px;bottom:20px;z-index:2147483647;overflow:hidden;" +
-      "padding:10px 18px;border:none;border-radius:999px;cursor:pointer;" +
-      "color:#fff;font:600 13px/1 system-ui,-apple-system,sans-serif;" +
-      "box-shadow:0 4px 14px rgba(0,0,0,.25);";
-    // 进度条背景:录入过程中从左往右填充。
-    prog = document.createElement("div");
-    prog.style.cssText =
-      "position:absolute;left:0;top:0;bottom:0;width:0;z-index:0;" +
-      "background:rgba(255,255,255,.4);transition:width .3s ease;";
-    lbl = document.createElement("span");
-    lbl.style.cssText = "position:relative;z-index:1;";
-    btn.appendChild(prog);
-    btn.appendChild(lbl);
-    btn.addEventListener("click", onClick);
-    document.body.appendChild(btn);
-    paint();
-  }
-
-  // 进行中:更新文案与进度条(0-100)。
-  function step(label, pct) {
-    if (lbl) lbl.textContent = label;
-    if (prog) prog.style.width = pct + "%";
-  }
-
-  // 空闲态:复位进度条,按 recorded 设定文案与底色。进行中由 step() 接管。
-  function paint() {
-    if (!btn) return;
-    btn.disabled = state.busy;
-    if (state.busy) return;
-    prog.style.width = "0%";
-    if (state.recorded) {
-      lbl.textContent = "已录入";
-      btn.style.background = "#16a34a";
-    } else {
-      lbl.textContent = "一键录入";
-      btn.style.background = "#0a83c4";
-    }
-  }
+  var recorded = false;
+  var quickBusy = false;
 
   function expectTtsPage(r, what) {
     if (r.status === 401) {
-      throw new Error("鉴权失败,请从囤囤鼠后台「快捷录入」重新安装脚本");
+      throw new Error("鉴权失败,请从囤囤鼠后台重新安装脚本");
     }
     var page = r.json;
     if (r.status < 200 || r.status >= 300 || !page ||
@@ -225,8 +333,7 @@ export function buildUserScript(
   // 返回 Promise<boolean>,点击流程会等待结果后再决定是否弹出覆盖确认。
   function refreshRecorded(auth) {
     if (!auth || !auth.userId) {
-      state.recorded = false;
-      paint();
+      recorded = false;
       return Promise.resolve(false);
     }
     var origin = normOrigin(location.origin);
@@ -250,10 +357,9 @@ export function buildUserScript(
         },
         1,
       ).then(function (account) { return !!account; });
-    }).then(function (recorded) {
-      state.recorded = !!recorded;
-      paint();
-      return state.recorded;
+    }).then(function (found) {
+      recorded = !!found;
+      return recorded;
     });
   }
 
@@ -449,7 +555,7 @@ export function buildUserScript(
   // 校验囤囤鼠响应:优先把后端的 error/message 透出到 toast。
   function checkStatus(r, what) {
     if (r.status === 401) {
-      throw new Error("鉴权失败,请从囤囤鼠后台「快捷录入」重新安装脚本");
+      throw new Error("鉴权失败,请从囤囤鼠后台重新安装脚本");
     }
     var detail = r.json && (r.json.error || r.json.message);
     if (r.status < 200 || r.status >= 300 || !r.json || r.json.id == null) {
@@ -482,43 +588,41 @@ export function buildUserScript(
       .catch(function () { return "签到失败"; });
   }
 
-  function onClick() {
-    if (state.busy) return;
+  function runQuickEntry() {
+    if (quickBusy) return;
     var auth = null;
     var wasRecorded = false;
     var origin = normOrigin(location.origin);
     var siteId = null;
     var accessToken = null;
-    state.busy = true;
-    btn.disabled = true;
-    btn.style.background = "#0a83c4";
+    quickBusy = true;
     // 1.解析并验证当前用户 → 2.确认覆盖 → 3.保存站点 → 4.取 PAT →
     // 5.确保 APIKey → 6.保存账号(均 upsert) → 7.签到一次。
-    step("验证登录…", 5);
+    TTS_UPSTREAM_UI.progress("验证登录…", 5);
     resolveAuth().then(function (resolved) {
       auth = resolved;
       return refreshRecorded(auth);
-    }).then(function (recorded) {
-      wasRecorded = recorded;
-      if (recorded && !confirm(
+    }).then(function (found) {
+      wasRecorded = found;
+      if (found && !confirm(
         "该账号已录入。重新保存会重新生成 new-api access token" +
           "(旧 token 立即失效)并覆盖已有记录,确定继续?",
       )) {
         throw taggedError("", "cancelled");
       }
-      step("保存站点…", 15);
+      TTS_UPSTREAM_UI.progress("保存站点…", 15);
       return tts("POST", "/api/sites", { origin: origin });
     }).then(function (r) {
       siteId = checkStatus(r, "保存站点").id;
-      step("获取令牌…", 40);
+      TTS_UPSTREAM_UI.progress("获取令牌…", 40);
       return genAccessToken(auth);
     }).then(function (token) {
       accessToken = token;
       // 保存账号前确保至少 1 个 APIKey(尽力而为,内部已吞错,失败不阻断保存)。
-      step("检查密钥…", 62);
+      TTS_UPSTREAM_UI.progress("检查密钥…", 62);
       return ensureApiKeys(auth);
     }).then(function () {
-      step("保存账号…", 80);
+      TTS_UPSTREAM_UI.progress("保存账号…", 80);
       return tts("POST", "/api/accounts", {
         siteId: Number(siteId),
         userId: String(auth.userId),
@@ -526,32 +630,37 @@ export function buildUserScript(
       });
     }).then(function (r) {
       var accountId = checkStatus(r, "保存账号").id;
-      state.recorded = true;
+      recorded = true;
       // 保存成功后顺带签到一次(尽力而为,不改变录入成功结果)。
-      step("签到中…", 90);
+      TTS_UPSTREAM_UI.progress("签到中…", 90);
       return tryCheckin(accountId);
     }).then(function (note) {
-      step("完成", 100);
+      TTS_UPSTREAM_UI.progress("完成", 100);
       var base = wasRecorded ? "已更新" : "已录入";
       toast(note ? (base + " · " + note) : base, true);
-      setTimeout(function () { state.busy = false; paint(); }, 450);
+      setTimeout(function () {
+        quickBusy = false;
+        TTS_UPSTREAM_UI.showIdle();
+      }, 450);
     }).catch(function (e) {
-      state.busy = false;
-      paint();
+      quickBusy = false;
+      TTS_UPSTREAM_UI.showIdle();
       if (e && e.kind === "cancelled") return;
       toast((e && e.message) ? e.message : "录入失败", false);
     });
   }
 
   function init() {
+    // 免登(active)或免登前置流程(busy)优先,快捷录入让位。
+    if (TTS_UPSTREAM_UI.engaged()) return;
     detectNewApi().then(function (ok) {
-      if (!ok || !document.body) return;
-      render();
+      if (!ok || !document.body || TTS_UPSTREAM_UI.engaged()) return;
+      TTS_UPSTREAM_UI.idleClick(runQuickEntry);
+      TTS_UPSTREAM_UI.showIdle();
       resolveAuth().then(function (auth) {
         return refreshRecorded(auth);
       }).catch(function () {
-        state.recorded = false;
-        paint();
+        recorded = false;
       });
     });
   }
