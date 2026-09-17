@@ -68,9 +68,135 @@ export function buildUserScript(
     var activeName = "";
     var exitHandler = null;
     var idleHandler = null;
+    // 拖拽状态与位置持久化(当前标签页,存 sessionStorage)。
+    var POS_KEY = "tts-capsule-pos";
+    var dragState = null;
+    var suppressClick = false;
 
     function hostNode() {
       return document.body || document.documentElement || null;
+    }
+
+    function clampNumber(value, min, max) {
+      if (typeof value !== "number" || !isFinite(value)) return min;
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function viewportSize() {
+      var el = document.documentElement;
+      var width = typeof globalThis.innerWidth === "number"
+        ? globalThis.innerWidth
+        : 0;
+      var height = typeof globalThis.innerHeight === "number"
+        ? globalThis.innerHeight
+        : 0;
+      if (!width && el && el.clientWidth) width = el.clientWidth;
+      if (!height && el && el.clientHeight) height = el.clientHeight;
+      return { width: width, height: height };
+    }
+
+    function setPosition(left, top) {
+      if (!button) return;
+      button.style.left = left + "px";
+      button.style.top = top + "px";
+      button.style.right = "auto";
+      button.style.bottom = "auto";
+    }
+
+    // 把记录的 left/top 应用回胶囊;越界时向内收,保证按钮始终可见。
+    function applyPosition(pos) {
+      if (!button) return;
+      if (!pos) {
+        button.style.left = "auto";
+        button.style.top = "auto";
+        button.style.right = "20px";
+        button.style.bottom = "20px";
+        return;
+      }
+      var size = viewportSize();
+      var width = button.offsetWidth || 0;
+      var height = button.offsetHeight || 0;
+      setPosition(
+        clampNumber(pos.left, 0, Math.max(0, size.width - width)),
+        clampNumber(pos.top, 0, Math.max(0, size.height - height)),
+      );
+    }
+
+    function readStoredPosition() {
+      try {
+        var raw = sessionStorage.getItem(POS_KEY);
+        if (!raw) return null;
+        var pos = JSON.parse(raw);
+        if (pos && typeof pos.left === "number" && typeof pos.top === "number" &&
+          isFinite(pos.left) && isFinite(pos.top)) return pos;
+      } catch (_) {}
+      return null;
+    }
+
+    function storePosition(left, top) {
+      try {
+        sessionStorage.setItem(POS_KEY, JSON.stringify({
+          left: Math.round(left),
+          top: Math.round(top),
+        }));
+      } catch (_) {}
+    }
+
+    function onPointerDown(event) {
+      if (!button || (event.button !== undefined && event.button !== 0)) return;
+      var rect = button.getBoundingClientRect
+        ? button.getBoundingClientRect()
+        : { left: 0, top: 0 };
+      dragState = {
+        id: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        moved: false,
+      };
+      // 指针捕获:拖到胶囊之外也能继续收到 pointermove/pointerup。
+      if (event.pointerId != null && button.setPointerCapture) {
+        try { button.setPointerCapture(event.pointerId); } catch (_) {}
+      }
+    }
+
+    function onPointerMove(event) {
+      if (!dragState) return;
+      if (event.pointerId != null && event.pointerId !== dragState.id) return;
+      var dx = event.clientX - dragState.startX;
+      var dy = event.clientY - dragState.startY;
+      // 阈值内视为点击,避免手抖把点击当成拖拽。
+      if (!dragState.moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      dragState.moved = true;
+      if (button) button.style.cursor = "grabbing";
+      var size = viewportSize();
+      var width = button ? (button.offsetWidth || 0) : 0;
+      var height = button ? (button.offsetHeight || 0) : 0;
+      setPosition(
+        clampNumber(dragState.left + dx, 0, Math.max(0, size.width - width)),
+        clampNumber(dragState.top + dy, 0, Math.max(0, size.height - height)),
+      );
+      if (event.preventDefault) event.preventDefault();
+    }
+
+    function onPointerUp(event) {
+      if (!dragState) return;
+      if (event.pointerId != null && event.pointerId !== dragState.id) return;
+      var moved = dragState.moved;
+      dragState = null;
+      if (button) button.style.cursor = "pointer";
+      if (event.pointerId != null && button && button.releasePointerCapture) {
+        try { button.releasePointerCapture(event.pointerId); } catch (_) {}
+      }
+      if (!moved || !button) return;
+      // 拖拽结束抑制随后的 click,避免误触录入/退出。
+      suppressClick = true;
+      setTimeout(function () { suppressClick = false; }, 0);
+      if (button.getBoundingClientRect) {
+        var rect = button.getBoundingClientRect();
+        storePosition(rect.left, rect.top);
+      }
     }
 
     function ensure() {
@@ -81,7 +207,8 @@ export function buildUserScript(
       button.style.cssText =
         "position:fixed;right:20px;bottom:20px;z-index:2147483647;" +
         "overflow:hidden;padding:10px 18px;border:none;border-radius:999px;" +
-        "cursor:pointer;color:#fff;font:600 13px/1 system-ui,-apple-system," +
+        "cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;" +
+        "color:#fff;font:600 13px/1 system-ui,-apple-system," +
         "sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);";
       bar = document.createElement("div");
       bar.style.cssText =
@@ -92,7 +219,12 @@ export function buildUserScript(
       button.appendChild(bar);
       button.appendChild(label);
       button.addEventListener("click", onClick);
+      button.addEventListener("pointerdown", onPointerDown);
+      button.addEventListener("pointermove", onPointerMove);
+      button.addEventListener("pointerup", onPointerUp);
+      button.addEventListener("pointercancel", onPointerUp);
       hostNode().appendChild(button);
+      applyPosition(readStoredPosition());
       paint();
     }
 
@@ -126,6 +258,11 @@ export function buildUserScript(
     }
 
     function onClick() {
+      // 刚完成拖拽的 pointerup 会紧跟一次 click,这里直接吞掉。
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       if (mode === "active") {
         if (!confirm(
           "退出免登状态?退出后将以当前账号重新登录上游," +

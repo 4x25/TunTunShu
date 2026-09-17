@@ -530,7 +530,9 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.0`),它同时提供「快捷录入」与 「上游
   PAT 免登」。脚本在页面右下角注入唯一的小胶囊按钮:免登状态显示
   「免登中(用户名)」,点击后 `confirm` 确认再退出;其他状态显示「快捷录入」;
-  录入或免登前置进行中则按步骤显示文案与进度条。脚本以
+  录入或免登前置进行中则按步骤显示文案与进度条。小胶囊支持拖拽移动,位置写入
+  当前标签的 `sessionStorage["tts-capsule-pos"]`(越界自动收回,同标签导航后沿用;
+  拖拽结束的那次 click 被丢弃,不会误触录入/退出)。脚本以
   `@grant GM_xmlhttpRequest` + `@inject-into page` + `@run-at document-start`
   注入,跨域调囤囤鼠 API 走 `GM_xmlhttpRequest`,页面 realm 用
   `unsafeWindow || globalThis` 解析(Tampermonkey 沙箱下仍能补丁页面 fetch/XHR)。
@@ -604,7 +606,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `lib/sse_test.ts`:SSE usage 嗅探、跨分片重组、无 usage 时返回 null。
 - `lib/userscript_test.ts`:用轻量浏览器 mock 执行合并后的「囤囤鼠脚本」,覆盖
   元数据/胶囊文案、新旧 new-api 鉴权顺序、401 fallback、Bearer 隔离、分页已录入
-  判定、录入与取消覆盖。
+  判定、录入与取消覆盖、小胶囊拖拽与 `sessionStorage` 位置持久化/恢复。
 - `lib/upstream_login_userscript_test.ts`:覆盖免登 runtime 普通页面无副作用、
   fragment 两阶段启动与跳转 `/profile`、logout 与 `/self` 校验、
   sessionStorage/Storage shadow、fetch/XHR 同源注入及外域隔离、新版 AuthBundle、

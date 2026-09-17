@@ -41,17 +41,22 @@ interface ScenarioOptions {
   existingPage?: number;
   confirmResult?: boolean;
   tokenTotal?: number;
+  capsulePos?: { left: number; top: number };
 }
 
 class FakeElement {
   readonly children: FakeElement[] = [];
-  readonly listeners = new Map<string, Array<() => void>>();
+  readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
   readonly style: Record<string, string> = {};
   disabled = false;
   textContent = "";
   title = "";
   type = "";
   removed = false;
+  offsetWidth = 120;
+  offsetHeight = 36;
+  clientWidth = 0;
+  clientHeight = 0;
 
   constructor(readonly tagName: string) {}
 
@@ -60,14 +65,38 @@ class FakeElement {
     return child;
   }
 
-  addEventListener(type: string, listener: () => void): void {
+  addEventListener(type: string, listener: (event?: unknown) => void): void {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
   }
 
-  dispatch(type: string): void {
-    for (const listener of this.listeners.get(type) ?? []) listener();
+  dispatch(type: string, event?: unknown): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+
+  setPointerCapture(): void {}
+
+  releasePointerCapture(): void {}
+
+  getBoundingClientRect(): {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  } {
+    const left = Number.parseFloat(this.style.left) || 0;
+    const top = Number.parseFloat(this.style.top) || 0;
+    return {
+      left,
+      top,
+      right: left + this.offsetWidth,
+      bottom: top + this.offsetHeight,
+      width: this.offsetWidth,
+      height: this.offsetHeight,
+    };
   }
 
   remove(): void {
@@ -81,6 +110,8 @@ interface Harness {
   lockNames: string[];
   getConfirmCount: () => number;
   getCapsuleLabel: () => string;
+  getCapsuleButton: () => FakeElement;
+  getStoredCapsulePos: () => { left: number; top: number } | null;
   click: () => Promise<void>;
 }
 
@@ -117,9 +148,31 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
   const lockNames: string[] = [];
   const created: FakeElement[] = [];
   let confirmCount = 0;
+  const sessionValues = new Map<string, string>();
+  const sessionStorage = {
+    getItem(key: string): string | null {
+      return sessionValues.get(String(key)) ?? null;
+    },
+    setItem(key: string, value: string): void {
+      sessionValues.set(String(key), String(value));
+    },
+    removeItem(key: string): void {
+      sessionValues.delete(String(key));
+    },
+    clear(): void {
+      sessionValues.clear();
+    },
+  };
+  if (options.capsulePos) {
+    sessionStorage.setItem(
+      "tts-capsule-pos",
+      JSON.stringify(options.capsulePos),
+    );
+  }
 
   const document = {
     body: new FakeElement("body"),
+    documentElement: new FakeElement("html"),
     readyState: "complete",
     createElement(tagName: string) {
       const element = new FakeElement(tagName);
@@ -128,6 +181,8 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
     },
     addEventListener(_type: string, _listener: () => void) {},
   };
+  document.documentElement.clientWidth = 1000;
+  document.documentElement.clientHeight = 800;
   const localStorage = {
     getItem(key: string): string | null {
       return key === "user" ? (options.localUser ?? null) : null;
@@ -297,6 +352,7 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
   const execute = new Function(
     "document",
     "localStorage",
+    "sessionStorage",
     "location",
     "navigator",
     "fetch",
@@ -308,6 +364,7 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
   execute(
     document,
     localStorage,
+    sessionStorage,
     { origin },
     navigator,
     fetch,
@@ -335,6 +392,11 @@ async function createHarness(options: ScenarioOptions = {}): Promise<Harness> {
     // 小胶囊文案在 label span 上;toast 用的是 div,不会误取。
     getCapsuleLabel: () =>
       created.find((element) => element.tagName === "span")?.textContent ?? "",
+    getCapsuleButton: () => button,
+    getStoredCapsulePos: () => {
+      const raw = sessionStorage.getItem("tts-capsule-pos");
+      return raw ? JSON.parse(raw) : null;
+    },
     async click() {
       button.dispatch("click");
       await waitUntil(
@@ -528,6 +590,59 @@ Deno.test("userscript 精确过滤并逐页查找已录入账号", async () => {
     !harness.ttsCalls.some((call) => call.method === "POST"),
     "cancelled second-page match must not perform writes",
   );
+});
+
+Deno.test("小胶囊支持拖拽并把位置记录到 sessionStorage", async () => {
+  const harness = await createHarness({
+    localUser: JSON.stringify({ id: 7, username: "legacy" }),
+  });
+  const button = harness.getCapsuleButton();
+  button.dispatch("pointerdown", {
+    button: 0,
+    pointerId: 1,
+    clientX: 200,
+    clientY: 150,
+  });
+  button.dispatch("pointermove", {
+    pointerId: 1,
+    clientX: 260,
+    clientY: 190,
+  });
+  button.dispatch("pointerup", {
+    pointerId: 1,
+    clientX: 260,
+    clientY: 190,
+  });
+  assertEquals(button.style.left, "60px", "dragged left mismatch");
+  assertEquals(button.style.top, "40px", "dragged top mismatch");
+  assertEquals(
+    harness.getStoredCapsulePos(),
+    { left: 60, top: 40 },
+    "capsule position was not stored",
+  );
+
+  // 拖拽结束紧随的 click 必须被吞掉,不能触发录入。
+  button.dispatch("click");
+  await settle();
+  assertEquals(
+    harness.getCapsuleLabel(),
+    "快捷录入",
+    "drag click started quick entry",
+  );
+  assert(
+    !harness.ttsCalls.some((call) => call.method === "POST"),
+    "drag click performed a write",
+  );
+});
+
+Deno.test("小胶囊从 sessionStorage 恢复拖拽位置", async () => {
+  const harness = await createHarness({
+    localUser: JSON.stringify({ id: 7, username: "legacy" }),
+    capsulePos: { left: 120, top: 80 },
+  });
+  const button = harness.getCapsuleButton();
+  assertEquals(button.style.left, "120px", "stored left not restored");
+  assertEquals(button.style.top, "80px", "stored top not restored");
 });
 
 Deno.test("合并后的囤囤鼠脚本元数据与胶囊文案正确且可执行", () => {
