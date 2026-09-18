@@ -527,7 +527,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
   `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「囤囤鼠脚本」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装合并后的
-  唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.0`),它同时提供「快捷录入」与 「上游
+  唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.1`),它同时提供「快捷录入」与 「上游
   PAT 免登」。脚本在页面右下角注入唯一的小胶囊按钮:免登状态显示
   「免登中(用户名)」,点击后 `confirm` 确认再退出;其他状态显示「快捷录入」;
   录入或免登前置进行中则按步骤显示文案与进度条。小胶囊支持拖拽移动,位置写入
@@ -550,7 +550,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **上游账号 PAT 免登**:账号行「登录」渲染为真实
   `<a target="_blank"
   rel="noopener noreferrer">`:仅当当前页检测到脚本同步暴露的
-  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.0"`
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.1"`
   (`buildAccountLoginHref`)时才把
   `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...` 写入
   href,交给浏览器原生新标签打开(支持中键/右键复制链接);未安装或版本不符时
@@ -582,8 +582,13 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   只是前端结构校验所需的占位对象,**不会在 new-api 后端创建 Session**。脚本禁止
   `/api/user/token` 落网,不会生成或轮换 PAT。Session
   管理、2FA、Passkey、Security Proof、Playground 等真实 Session
-  专属功能不受支持;WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch
-  与其他 realm 也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
+  专属功能不受支持;这些端点可能对 PAT 返回 401/403,而上游前端把 401 当作登录
+  过期并清掉 `localStorage.user`——runtime 对 `/api/user/passkey*` 与
+  `/api/user/sessions*` 做响应兜底:成功响应(新版 passkey 接受 PAT)原样透传,
+  鉴权失败时把 GET 改写为 `{success:true,data:{enabled:false}}` /
+  `{success:true,data:[]}`,写操作降级为 HTTP 200 的业务失败,避免误触发登出;
+  WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch 与其他 realm
+  也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
   时会立即删除免登状态并停用当前页补丁,避免 SPA 同页重新登录后仍误用旧
   PAT;点击小胶囊的「免登中(用户名)」并 confirm 后统一退出,导航旧版兼容路径
   `/login`(新版会自行重定向到 `/sign-in`)。
@@ -610,8 +615,9 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `lib/upstream_login_userscript_test.ts`:覆盖免登 runtime 普通页面无副作用、
   fragment 两阶段启动与跳转 `/profile`、logout 与 `/self` 校验、
   sessionStorage/Storage shadow、fetch/XHR 同源注入及外域隔离、新版 AuthBundle、
-  禁止 PAT 轮换与退出清理、合并脚本小胶囊的免登状态/confirm 退出/分步进度,以及
-  CloakBrowser memory-only bootstrap 不把凭据写入 URL/Storage。
+  禁止 PAT 轮换与退出清理、Passkey/会话端点的 401/403 响应兜底与成功透传、
+  合并脚本小胶囊的免登状态/confirm 退出/分步进度,以及 CloakBrowser memory-only
+  bootstrap 不把凭据写入 URL/Storage。
 - `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
   HTTP(S) origin 校验、fragment 凭据编码,以及登录链接仅在脚本就绪且 Origin
   合法时携带 PAT。
@@ -683,7 +689,7 @@ Fresh
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。合并后只保留这一个脚本路由。
 - 脚本源码包含通用免登逻辑与自身安装/更新 URL;PAT/userId 仅在页面检测到脚本
-  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.0"`)后,才进入账号
+  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.1"`)后,才进入账号
   「登录」链接 href 的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
 - 版本号:UI 页脚/登录页显示 `v1.5.0`,合并后的「囤囤鼠脚本」独立
-  `@version 2.0.0`;`deno.json` 无 version 字段。
+  `@version 2.0.1`;`deno.json` 无 version 字段。

@@ -1,6 +1,6 @@
 // 合并后的「囤囤鼠脚本」同时承担快捷录入与上游免登;marker 由脚本在
 // document-start 写入,后台据此判断「登录」链接是否可以携带 PAT。
-export const UPSTREAM_LOGIN_SCRIPT_VERSION = "2.0.0";
+export const UPSTREAM_LOGIN_SCRIPT_VERSION = "2.0.1";
 export const UPSTREAM_LOGIN_SCRIPT_MARKER = "__TTS_UPSTREAM_LOGIN_SCRIPT__";
 
 export function isUpstreamLoginScriptInstalled(

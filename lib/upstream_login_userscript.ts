@@ -60,7 +60,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
     ? unsafeWindow
     : globalThis;
 
-  var SCRIPT_VERSION = "2.0.0";
+  var SCRIPT_VERSION = "2.0.1";
   var MARKER = "__TTS_UPSTREAM_LOGIN_SCRIPT__";
   // 合并后的「囤囤鼠脚本」会注入 TTS_UPSTREAM_UI,用于把退出现有登录态、
   // 验证令牌等步骤的进度显示到页面小胶囊按钮;CloakBrowser automation 没有该
@@ -437,6 +437,66 @@ export function buildUpstreamLoginRuntimeSource(): string {
     return url.pathname.replace(/\\/+$/, "") === "/api/user/token";
   }
 
+  function stripTrailingSlash(path) {
+    var end = path.length;
+    while (end > 1 && path.charAt(end - 1) === "/") end--;
+    return path.slice(0, end);
+  }
+
+  // PAT 免登没有上游浏览器 Session。Passkey 状态/管理与登录会话管理属于「Session
+  // 专属」端点:上游会对 PAT 返回 401/403,而上游前端把 401 当成登录过期并清掉
+  // localStorage.user,连带把免登状态一起清掉。这里对这些端点做响应兜底:成功响应
+  // (新版 new-api 的 passkey 接受 PAT)原样透传,鉴权失败则改写成合成结果。
+  function sessionOnlyKind(url) {
+    var path = stripTrailingSlash(url.pathname);
+    if (path === "/api/user/passkey" || path.indexOf("/api/user/passkey/") === 0) {
+      return "passkey";
+    }
+    if (path === "/api/user/sessions" || path.indexOf("/api/user/sessions/") === 0) {
+      return "sessions";
+    }
+    return null;
+  }
+
+  function isSessionAuthFailure(status, body) {
+    if (status === 401 || status === 403) return true;
+    return !!(body && typeof body.code === "string" &&
+      body.code.indexOf("AUTH_") === 0);
+  }
+
+  function sessionOnlyBody(kind, method) {
+    if (String(method || "GET").toUpperCase() !== "GET") {
+      return {
+        success: false,
+        message: "囤囤鼠 PAT 免登模式不支持该 Passkey / 会话操作",
+      };
+    }
+    if (kind === "passkey") {
+      return { success: true, message: "", data: { enabled: false } };
+    }
+    return { success: true, message: "", data: [] };
+  }
+
+  function sessionOnlyResponse(kind, method) {
+    return new PAGE.Response(JSON.stringify(sessionOnlyBody(kind, method)), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function guardSessionOnlyFetch(response, kind, method) {
+    if (!response) return response;
+    var clone;
+    try { clone = response.clone(); } catch (_) { return response; }
+    return clone.text().then(function (text) {
+      var body = text ? parseJson(text) : null;
+      if (!isSessionAuthFailure(response.status, body)) return response;
+      return sessionOnlyResponse(kind, method);
+    }).catch(function () {
+      return response;
+    });
+  }
+
   function authHeaders(input) {
     var headers = new PAGE.Headers(input);
     headers.set("Authorization", "Bearer " + login.accessToken);
@@ -531,10 +591,15 @@ export function buildUpstreamLoginRuntimeSource(): string {
       next.credentials = memoryOnly ? "include" : "omit";
     }
 
-    if (request) {
-      return nativeFetch(new PAGE.Request(request, next));
-    }
-    return nativeFetch(input, next);
+    var pending = request
+      ? nativeFetch(new PAGE.Request(request, next))
+      : nativeFetch(input, next);
+    var sessionOnly = sessionOnlyKind(target);
+    if (!sessionOnly) return pending;
+    var method = (init && init.method) || (request && request.method) || "GET";
+    return pending.then(function (response) {
+      return guardSessionOnlyFetch(response, sessionOnly, method);
+    });
   };
 
   var xhrProto = NativeXHR.prototype;
@@ -545,6 +610,8 @@ export function buildUpstreamLoginRuntimeSource(): string {
   var nativeXhrRemoveListener = xhrProto.removeEventListener;
   var responseTextGetter = Object.getOwnPropertyDescriptor(xhrProto, "responseText");
   var responseGetter = Object.getOwnPropertyDescriptor(xhrProto, "response");
+  var statusGetter = Object.getOwnPropertyDescriptor(xhrProto, "status");
+  var statusTextGetter = Object.getOwnPropertyDescriptor(xhrProto, "statusText");
   var xhrState = new WeakMap();
   var xhrListeners = new WeakMap();
 
@@ -591,6 +658,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
       refresh: isSameOriginApi(target) && isRefresh(target),
       logout: isSameOriginApi(target) && isLogout(target),
       blocked: isSameOriginApi(target) && isPatRotation(target),
+      sessionOnly: isSameOriginApi(target) ? sessionOnlyKind(target) : null,
     });
     return nativeXhrOpen.apply(this, arguments);
   };
@@ -616,13 +684,13 @@ export function buildUpstreamLoginRuntimeSource(): string {
     });
   }
 
-  function syntheticXhr(xhr, status, body) {
+  function syntheticXhr(xhr, status, body, statusText) {
     var text = JSON.stringify(body);
     clearOwnResponse(xhr);
     Object.defineProperties(xhr, {
       readyState: { configurable: true, get: function () { return 4; } },
       status: { configurable: true, get: function () { return status; } },
-      statusText: { configurable: true, get: function () { return "Forbidden"; } },
+      statusText: { configurable: true, get: function () { return statusText; } },
       responseText: { configurable: true, get: function () { return text; } },
       response: {
         configurable: true,
@@ -648,6 +716,81 @@ export function buildUpstreamLoginRuntimeSource(): string {
       callSyntheticListeners(xhr, "readystatechange");
       callSyntheticListeners(xhr, "load");
       callSyntheticListeners(xhr, "loadend");
+    });
+  }
+
+  function installSessionOnlyGuard(xhr, kind, method) {
+    var inspected = null;
+    function nativeText() {
+      try {
+        if (xhr.responseType === "json" && responseGetter && responseGetter.get) {
+          var value = responseGetter.get.call(xhr);
+          return value == null ? "" : JSON.stringify(value);
+        }
+        return responseTextGetter && responseTextGetter.get
+          ? responseTextGetter.get.call(xhr)
+          : "";
+      } catch (_) {
+        return "";
+      }
+    }
+    function nativeStatus() {
+      return statusGetter && statusGetter.get ? statusGetter.get.call(xhr) : 0;
+    }
+    function nativeStatusText() {
+      return statusTextGetter && statusTextGetter.get
+        ? statusTextGetter.get.call(xhr)
+        : "";
+    }
+    function inspect() {
+      if (inspected) return inspected;
+      // 请求未完成时不缓存,避免把中间态当成最终结果。
+      if (xhr.readyState !== 4) {
+        return {
+          status: nativeStatus(),
+          statusText: nativeStatusText(),
+          text: "",
+        };
+      }
+      var text = nativeText();
+      var body = text ? parseJson(text) : null;
+      if (isSessionAuthFailure(nativeStatus(), body)) {
+        inspected = {
+          status: 200,
+          statusText: "OK",
+          text: JSON.stringify(sessionOnlyBody(kind, method)),
+        };
+      } else {
+        inspected = {
+          status: nativeStatus(),
+          statusText: nativeStatusText(),
+          text: text,
+        };
+      }
+      return inspected;
+    }
+    Object.defineProperties(xhr, {
+      status: {
+        configurable: true,
+        get: function () { return inspect().status; },
+      },
+      statusText: {
+        configurable: true,
+        get: function () { return inspect().statusText; },
+      },
+      responseText: {
+        configurable: true,
+        get: function () { return inspect().text; },
+      },
+      response: {
+        configurable: true,
+        get: function () {
+          var result = inspect();
+          return xhr.responseType === "json"
+            ? parseJson(result.text)
+            : result.text;
+        },
+      },
     });
   }
 
@@ -706,8 +849,14 @@ export function buildUpstreamLoginRuntimeSource(): string {
       syntheticXhr(this, 403, {
         success: false,
         message: "囤囤鼠 PAT 免登模式禁止旋转 AccessToken",
-      });
+      }, "Forbidden");
       return;
+    }
+    if (state.sessionOnly) {
+      nativeXhrSetHeader.call(this, "Authorization", "Bearer " + login.accessToken);
+      nativeXhrSetHeader.call(this, "New-Api-User", login.userId);
+      installSessionOnlyGuard(this, state.sessionOnly, state.method);
+      return nativeXhrSend.call(this, body);
     }
     if (state.logout) {
       deactivateLogin();

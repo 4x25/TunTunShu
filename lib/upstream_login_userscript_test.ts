@@ -65,6 +65,12 @@ interface HarnessOptions {
   legacyLogoutBody?: unknown;
   selfStatus?: number;
   selfBody?: unknown;
+  passkeyStatus?: number;
+  passkeyBody?: unknown;
+  passkeyWriteStatus?: number;
+  passkeyWriteBody?: unknown;
+  sessionsStatus?: number;
+  sessionsBody?: unknown;
   protocol?: "http:" | "https:";
 }
 
@@ -315,6 +321,30 @@ function createHarness(options: HarnessOptions = {}): Harness {
     }
     if (url.pathname === "/api/user/token") {
       return { status: 200, body: { success: true, data: "rotated-pat" } };
+    }
+    // 模拟 rc.21:passkey 状态只认浏览器 Session,PAT 请求返回 401。
+    if (url.pathname === "/api/user/passkey") {
+      if (method === "GET") {
+        return {
+          status: options.passkeyStatus ?? 401,
+          body: options.passkeyBody ?? { success: false, message: "未登录" },
+        };
+      }
+      return {
+        status: options.passkeyWriteStatus ?? 401,
+        body: options.passkeyWriteBody ?? { success: false, message: "未登录" },
+      };
+    }
+    // 模拟新版 new-api:会话管理要求浏览器 Session,PAT 请求返回 403。
+    if (url.pathname === "/api/user/sessions") {
+      return {
+        status: options.sessionsStatus ?? 403,
+        body: options.sessionsBody ?? {
+          success: false,
+          code: "AUTH_SESSION_REQUIRED",
+          message: "a dashboard login session is required",
+        },
+      };
     }
     return {
       status: 200,
@@ -597,7 +627,7 @@ Deno.test("upstream login runtime 普通页面保持惰性", async () => {
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "2.0.0",
+    "2.0.1",
     "script marker mismatch",
   );
   assert(harness.sandbox.fetch === originalFetch, "inert page patched fetch");
@@ -1058,6 +1088,147 @@ Deno.test("upstream login userscript XHR 覆盖鉴权、虚拟 refresh 并阻止
   );
 });
 
+Deno.test("upstream login userscript 兜底 Passkey/会话端点的 401/403", async () => {
+  const harness = createHarness({ storedSession: activeSession() });
+  harness.execute();
+  await settle();
+  const patchedFetch = harness.sandbox.fetch as typeof fetch;
+
+  // rc.21:passkey 对 PAT 返回 401;兜底为「未启用」而不是触发上游全局登出。
+  const passkeyResponse = await patchedFetch("/api/user/passkey", {
+    method: "GET",
+  });
+  assertEquals(passkeyResponse.status, 200, "passkey status was not rescued");
+  const passkeyBody = await passkeyResponse.json() as {
+    success: boolean;
+    data: { enabled: boolean };
+  };
+  assertEquals(passkeyBody.success, true, "passkey body was not success");
+  assertEquals(
+    passkeyBody.data.enabled,
+    false,
+    "passkey was not reported disabled",
+  );
+  assertEquals(
+    harness.fetchCalls.at(-1)?.headers.authorization,
+    `Bearer ${PAT}`,
+    "passkey request lacked PAT",
+  );
+
+  // rc.37:会话管理对 PAT 返回 403 AUTH_SESSION_REQUIRED;兜底为空列表。
+  const sessionsResponse = await patchedFetch("/api/user/sessions", {
+    method: "GET",
+  });
+  assertEquals(sessionsResponse.status, 200, "sessions status was not rescued");
+  const sessionsBody = await sessionsResponse.json() as {
+    success: boolean;
+    data: unknown[];
+  };
+  assertEquals(sessionsBody.success, true, "sessions body was not success");
+  assertEquals(
+    Array.isArray(sessionsBody.data),
+    true,
+    "sessions data was not a list",
+  );
+  assertEquals(sessionsBody.data.length, 0, "sessions list was not empty");
+
+  // 免登状态未被清掉:后续普通请求依然带 PAT。
+  await patchedFetch("/api/items");
+  assertEquals(
+    harness.fetchCalls.at(-1)?.headers.authorization,
+    `Bearer ${PAT}`,
+    "login state was cleared after session-only endpoints",
+  );
+  assertEquals(
+    harness.localStorage.getItem("user") === null,
+    false,
+    "shadow user was cleared after session-only endpoints",
+  );
+});
+
+Deno.test("upstream login userscript XHR 兜底 Passkey/会话端点的 401/403", async () => {
+  const harness = createHarness({ storedSession: activeSession() });
+  harness.execute();
+  await settle();
+
+  const passkeyXhr = harness.createXhr();
+  passkeyXhr.open("GET", "/api/user/passkey");
+  await sendXhr(passkeyXhr);
+  assertEquals(passkeyXhr.status, 200, "XHR passkey status was not rescued");
+  const passkeyBody = JSON.parse(passkeyXhr.responseText) as {
+    success: boolean;
+    data: { enabled: boolean };
+  };
+  assertEquals(passkeyBody.success, true, "XHR passkey body was not success");
+  assertEquals(
+    passkeyBody.data.enabled,
+    false,
+    "XHR passkey was not reported disabled",
+  );
+  assertEquals(
+    harness.xhrCalls.at(-1)?.headers.authorization,
+    `Bearer ${PAT}`,
+    "XHR passkey request lacked PAT",
+  );
+
+  const sessionsXhr = harness.createXhr();
+  sessionsXhr.open("GET", "/api/user/sessions");
+  await sendXhr(sessionsXhr);
+  assertEquals(sessionsXhr.status, 200, "XHR sessions status was not rescued");
+  const sessionsBody = JSON.parse(sessionsXhr.responseText) as {
+    success: boolean;
+    data: unknown[];
+  };
+  assertEquals(sessionsBody.success, true, "XHR sessions body was not success");
+  assertEquals(sessionsBody.data.length, 0, "XHR sessions list was not empty");
+
+  const afterXhr = harness.createXhr();
+  afterXhr.open("GET", "/api/items");
+  await sendXhr(afterXhr);
+  assertEquals(
+    harness.xhrCalls.at(-1)?.headers.authorization,
+    `Bearer ${PAT}`,
+    "XHR login state was cleared after session-only endpoints",
+  );
+});
+
+Deno.test("upstream login userscript 透传 Passkey 成功响应并把写操作降级为业务失败", async () => {
+  const harness = createHarness({
+    storedSession: activeSession(),
+    passkeyStatus: 200,
+    passkeyBody: { success: true, data: { enabled: true, last_used_at: 42 } },
+  });
+  harness.execute();
+  await settle();
+
+  // 新版 new-api 的 passkey 状态接受 PAT,真实数据必须原样透传。
+  const patchedFetch = harness.sandbox.fetch as typeof fetch;
+  const response = await patchedFetch("/api/user/passkey");
+  assertEquals(response.status, 200, "passkey passthrough status mismatch");
+  const body = await response.json() as { data: { enabled: boolean } };
+  assertEquals(body.data.enabled, true, "passkey passthrough hid real data");
+
+  // 写操作（注册/删除）在鉴权失败时兜底成业务失败,但不能是 401。
+  const writeXhr = harness.createXhr();
+  writeXhr.open("DELETE", "/api/user/passkey");
+  await sendXhr(writeXhr);
+  assertEquals(writeXhr.status, 200, "passkey write was not rescued");
+  const writeBody = JSON.parse(writeXhr.responseText) as {
+    success: boolean;
+    message: string;
+  };
+  assertEquals(
+    writeBody.success,
+    false,
+    "passkey write did not report unsupported",
+  );
+  assertEquals(
+    writeBody.message.includes("不支持"),
+    true,
+    "passkey write message missing",
+  );
+});
+
 Deno.test("upstream login userscript logout 后停用补丁且不发送占位 Session", async () => {
   const fetchHarness = createHarness({ storedSession: activeSession() });
   fetchHarness.execute();
@@ -1259,7 +1430,7 @@ Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", asyn
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "2.0.0",
+    "2.0.1",
     "automation runtime marker mismatch",
   );
   for (

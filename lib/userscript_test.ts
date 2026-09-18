@@ -653,7 +653,7 @@ Deno.test("合并后的囤囤鼠脚本元数据与胶囊文案正确且可执行
   for (
     const directive of [
       "// @name         囤囤鼠脚本",
-      "// @version      2.0.0",
+      "// @version      2.0.1",
       "// @match        *://*/*",
       "// @grant        GM_xmlhttpRequest",
       "// @connect      tuntunshu.example",

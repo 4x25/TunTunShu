@@ -21,7 +21,7 @@
 import { buildUpstreamLoginRuntimeSource } from "./upstream_login_userscript.ts";
 
 /** 合并后的「囤囤鼠脚本」版本(同时作为免登 marker 版本)。 */
-export const TUNTUNSHU_SCRIPT_VERSION = "2.0.0";
+export const TUNTUNSHU_SCRIPT_VERSION = "2.0.1";
 
 export function buildUserScript(
   opts: { baseUrl: string; authKey: string },
