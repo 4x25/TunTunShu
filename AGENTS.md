@@ -464,7 +464,9 @@ email_verification 至少命中 2 项);不再用「非 404 且 <500」的纯状�
 命中时把整个 data 负载写入 `sites.status_data` 缓存,失败/异常时置 null 并标
 down;`markSiteCheckinDisabled`(`site_service.ts`)则基于上游业务回执把
 `checkin_enabled=false` **合并**进现有快照(`coalesce(status_data,'{}') || ...`),
-不会清掉其它字段。
+不会清掉其它字段。检测接口(`POST /api/sites/:id/health-check`)的返回体在
+`{ok,httpStatus,newApi,status}` 之外还带 `site`——检测后重读的整行 `sites` (含
+`status_data`、`last_health_check_log_id` 等),便于直接核对落库结果。
 
 `account_api_key_sync` 任务类型**无独立 cron**(jobs/ 中无对应 job):自动拉 Key
 已并入 账号数据同步 cron(`syncAccount`

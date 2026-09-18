@@ -205,6 +205,16 @@ export async function updateSite(
  * 包裹并通过标志性字段识别(见 isNewApiStatusData);命中时把整个 data
  * 负载落库到 sites.status_data 作为缓存,供后续流程使用,失败时清空。
  */
+/**
+ * 重读整行站点数据(含 status_data),供检测接口把「检测后」的真实落库状态返回。
+ */
+async function readSiteRow(id: number) {
+  const rows = await getSql()<Record<string, unknown>[]>`
+    select * from sites where id = ${id}
+  `;
+  return rows[0] ?? null;
+}
+
 export async function healthCheckSite(id: number) {
   const sql = getSql();
   const rows = await sql<{ id: number; origin: string }[]>`
@@ -242,6 +252,9 @@ export async function healthCheckSite(id: number) {
       httpStatus: response.status,
       newApi: isHealthy,
       status,
+      // 检测接口把整行站点(含 status_data / last_health_check_log_id 等)
+      // 原样回传,便于排查。
+      site: await readSiteRow(id),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -256,7 +269,12 @@ export async function healthCheckSite(id: number) {
       set status = 'down', status_data = null, last_health_check_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
-    return { ok: false, error: message, status: "down" };
+    return {
+      ok: false,
+      error: message,
+      status: "down",
+      site: await readSiteRow(id),
+    };
   }
 }
 

@@ -272,12 +272,30 @@ export default function UpstreamApp() {
     act(
       "hc" + s.id,
       async () => {
-        const r = await apiSend<{ status?: string; httpStatus?: number }>(
+        const r = await apiSend<{
+          status?: string;
+          httpStatus?: number;
+          newApi?: boolean;
+          error?: string;
+          site?: {
+            id?: number;
+            status?: string;
+            enabled?: boolean;
+            status_data?: { checkin_enabled?: boolean } | null;
+          } | null;
+        }>(
           "POST",
           `/sites/${s.id}/health-check`,
         );
+        // 检测接口现在回传整行站点数据,直接打到控制台方便排查。
+        console.log("[site health-check]", r);
+        const checkinEnabled = r.site?.status_data?.checkin_enabled;
         return `「${s.name}」检测：${r.status ?? "?"}${
           r.httpStatus ? ` (HTTP ${r.httpStatus})` : ""
+        }${
+          checkinEnabled === undefined
+            ? ""
+            : ` · checkin_enabled=${checkinEnabled}`
         }`;
       },
       "siteOnly",
