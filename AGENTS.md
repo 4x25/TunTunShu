@@ -329,7 +329,9 @@ heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽�
 只有全部确认退出才删除 lease；否则仅停 heartbeat、由 TTL 隔离。
 
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
-日志。浏览器成功 → `checked`/success;功能关闭或租约 busy →
+日志。站点 `checkin_enabled === false` 时不直连、也不启动浏览器,直接返回
+`unknown`/skipped + `skipped:true`(同时把 `checkin_status` 清回 `unknown`,
+避免残留「需手动」);浏览器成功 → `checked`/success;功能关闭或租约 busy →
 `manual_required`/skipped;浏览器已经启动但超时、UI 不兼容或内部失败 →
 `manual_required`/failed。返回值额外带 `checkinMethod:'direct'|'browser'`
 与脱敏的 `automation:{attempted,code,durationMs}`;
@@ -456,7 +458,9 @@ down。
 await,捕获单个错误计为 failed (不中断整批),返回
 `{total,success,failed,skipped,results}`。account_checkin 用自定义 classify:
 `manual_required` 且浏览器未启动(功能关闭/全局租约繁忙)计为
-skipped,浏览器已启动但失败计为 failed。**system_task_logs 由 service 层写,不是
+skipped,浏览器已启动但失败计为 failed;`skipped:true`(站点未开放签到)同样计为
+skipped。`runAccountCheckinJob` 只选取站点 `checkin_enabled !== false`
+的启用账号(未知/未缓存按可签到处理)。**system_task_logs 由 service 层写,不是
 runner。**
 
 **账号刷新编排**:`POST /api/accounts` 与 `PATCH /api/accounts/:id` 在
@@ -519,9 +523,10 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   a→z。probe-name「自动获取」自动填站点/账号名。上游页所有带悬浮提示的按钮(行操作签到/复制密钥/协议图标/工具栏脚本安装等)统一用
   daisyUI `tooltip` 组件(`data-tip`,非原生 title);账号「签到」按钮有四种状态:
   ①站点未开放签到(`site_checkin_enabled === false`,来自站点 status_data)→
-  置灰禁用 + not-allowed 光标 + hover tip「站点未开放签到功能」;②可签到
-  (checkin_status 为 unchecked/unknown)→ 正常可点击「签到」;③已签到 →
-  绿色「已签到」+ hover tip 展示签到日期与收获额度(取 accounts.checkin_date/
+  置灰禁用 + not-allowed 光标 + 文案「未开放」+ hover tip「站点未开放签到功能」
+  (优先于④,不会被 manual_required/failed 覆盖);②可签到 (checkin_status 为
+  unchecked/unknown)→ 正常可点击「签到」;③已签到 → 绿色「已签到」+ hover tip
+  展示签到日期与收获额度(取 accounts.checkin_date/
   checkin_quota);④自动签到已执行但有误(manual_required/failed)→ 黄色
   「需手动」/红色「签到失败」。请求执行期间按钮显示「验证中…」。按钮签到成功后
   **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端

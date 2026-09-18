@@ -34,6 +34,7 @@ export interface AccountWithOrigin {
   user_id: string;
   access_token: string;
   origin: string;
+  site_checkin_enabled?: boolean | null;
 }
 
 interface UpstreamToken {
@@ -736,6 +737,7 @@ export interface AccountCheckinExecution {
   body?: string;
   error?: string;
   automation?: CheckinAutomation;
+  skipped?: boolean;
 }
 
 export interface CheckinDependencies {
@@ -786,6 +788,16 @@ export async function executeAccountCheckin(
   dependencies: Partial<CheckinDependencies> = {},
 ): Promise<AccountCheckinExecution> {
   const deps = { ...defaultCheckinDependencies, ...dependencies };
+  // 站点明确未开放签到时直接跳过,不直连、也不启动浏览器。
+  if (account.site_checkin_enabled === false) {
+    return {
+      checkinStatus: "unknown",
+      taskStatus: "skipped",
+      checkinMethod: "direct",
+      message: "站点未开放签到功能",
+      skipped: true,
+    };
+  }
   let settings: Awaited<ReturnType<typeof getSettings>>;
   let response: Response;
   try {
@@ -968,9 +980,11 @@ export async function checkinAccount(id: number) {
       user_id: string;
       access_token: string;
       origin: string;
+      site_checkin_enabled: boolean | null;
     }[]
   >`
-    select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, sites.origin
+    select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, sites.origin,
+      (sites.status_data->>'checkin_enabled')::boolean as site_checkin_enabled
     from accounts
     join sites on sites.id = accounts.site_id
     where accounts.id = ${id}
@@ -1012,5 +1026,6 @@ export async function checkinAccount(id: number) {
     ...(result.automation === undefined
       ? {}
       : { automation: result.automation }),
+    ...(result.skipped === undefined ? {} : { skipped: result.skipped }),
   };
 }

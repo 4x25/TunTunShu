@@ -39,5 +39,10 @@ Deno.test("account check-in job distinguishes skipped and attempted automation",
     "failed",
     "browser infrastructure failure",
   );
+  assertEquals(
+    classifyAccountCheckinResult({ skipped: true }),
+    "skipped",
+    "site check-in disabled result",
+  );
   assertEquals(classifyAccountCheckinResult(null), "failed", "missing account");
 });

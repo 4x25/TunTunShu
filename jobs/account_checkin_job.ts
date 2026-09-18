@@ -7,9 +7,11 @@ export function classifyAccountCheckinResult(
 ): "success" | "failed" | "skipped" {
   const value = result as {
     ok?: boolean;
+    skipped?: boolean;
     checkinStatus?: string;
     automation?: { attempted?: boolean; code?: string };
   } | null;
+  if (value?.skipped) return "skipped";
   if (value?.checkinStatus === "manual_required") {
     if (!value.automation) return "skipped";
     return !value.automation.attempted &&
@@ -28,7 +30,12 @@ export function classifyAccountCheckinResult(
 export async function runAccountCheckinJob() {
   const sql = getSql();
   const rows = await sql<{ id: number }[]>`
-    select id from accounts where enabled = true order by id
+    select accounts.id
+    from accounts
+    join sites on sites.id = accounts.site_id
+    where accounts.enabled = true
+      and coalesce((sites.status_data->>'checkin_enabled')::boolean, true)
+    order by accounts.id
   `;
   return await runForIds(
     rows.map((row) => row.id),

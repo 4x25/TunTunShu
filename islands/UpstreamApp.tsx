@@ -286,10 +286,20 @@ export default function UpstreamApp() {
     act(
       "ci" + a.id,
       async () => {
-        const r = await apiSend<{ checkinStatus?: string; error?: string }>(
+        const r = await apiSend<
+          {
+            checkinStatus?: string;
+            error?: string;
+            skipped?: boolean;
+            message?: string;
+          }
+        >(
           "POST",
           `/accounts/${a.id}/checkin`,
         );
+        if (r.skipped) {
+          return `「${a.name}」签到：${r.message ?? "站点未开放签到功能"}`;
+        }
         const checkinMsg = `「${a.name}」签到：${
           CHECKIN_MAP[r.checkinStatus ?? "unknown"]?.[1] ?? r.checkinStatus ??
             r.error ?? "?"

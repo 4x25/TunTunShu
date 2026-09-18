@@ -109,6 +109,8 @@ export function AccountColumn(
               a.checkin_status === "manual_required";
             const ciLabel = ciBusy
               ? "验证中…"
+              : siteCheckinOff
+              ? "未开放"
               : checked
               ? "已签到"
               : a.checkin_status === "failed"
@@ -116,7 +118,9 @@ export function AccountColumn(
               : manualRequired
               ? "需手动"
               : "签到";
-            const ciTone: "ok" | "bad" | undefined = checked
+            const ciTone: "ok" | "bad" | undefined = siteCheckinOff
+              ? undefined
+              : checked
               ? "ok"
               : a.checkin_status === "failed"
               ? "bad"
@@ -182,7 +186,7 @@ export function AccountColumn(
                     disabled={ciDisabled}
                     onClick={() => onCheckin(a)}
                   >
-                    {manualRequired
+                    {manualRequired && !siteCheckinOff
                       ? <span style="color:var(--warn)">{ciLabel}</span>
                       : ciLabel}
                   </ActBtn>

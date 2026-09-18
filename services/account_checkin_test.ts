@@ -53,6 +53,30 @@ function fakeLease(
   };
 }
 
+Deno.test("account check-in skips sites without check-in enabled", async () => {
+  let directCalls = 0;
+  let browserCalls = 0;
+  const result = await executeAccountCheckin(
+    { ...account, site_checkin_enabled: false },
+    {
+      loadSettings: () => settings(true),
+      directCheckin: () => {
+        directCalls += 1;
+        return Promise.resolve(response({ success: true }));
+      },
+      browserCheckin: () => {
+        browserCalls += 1;
+        throw new Error("browser must not run");
+      },
+    },
+  );
+  assertEquals(result.checkinStatus, "unknown", "check-in status");
+  assertEquals(result.taskStatus, "skipped", "task status");
+  assertEquals(result.skipped, true, "skipped flag");
+  assertEquals(directCalls, 0, "direct check-in call count");
+  assertEquals(browserCalls, 0, "browser call count");
+});
+
 Deno.test("account check-in keeps direct success on the fast path", async () => {
   let browserCalls = 0;
   const result = await executeAccountCheckin(account, {
