@@ -53,10 +53,23 @@ function fakeLease(
   };
 }
 
+/**
+ * 单测统一禁用「challenge 时用 GET /api/user/checkin 复核」的真实网络调用;
+ * 需要该行为的用例可显式覆盖 probeCheckinDisabled。
+ */
+const runCheckin = (
+  account: AccountWithOrigin,
+  dependencies: Parameters<typeof executeAccountCheckin>[1] = {},
+) =>
+  executeAccountCheckin(account, {
+    probeCheckinDisabled: () => Promise.resolve(false),
+    ...dependencies,
+  });
+
 Deno.test("account check-in skips sites without check-in enabled", async () => {
   let directCalls = 0;
   let browserCalls = 0;
-  const result = await executeAccountCheckin(
+  const result = await runCheckin(
     { ...account, site_checkin_enabled: false },
     {
       loadSettings: () => settings(true),
@@ -79,7 +92,7 @@ Deno.test("account check-in skips sites without check-in enabled", async () => {
 
 Deno.test("account check-in keeps direct success on the fast path", async () => {
   let browserCalls = 0;
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () =>
       Promise.resolve(response({ success: true, message: "签到成功" })),
@@ -96,7 +109,7 @@ Deno.test("account check-in keeps direct success on the fast path", async () => 
 
 Deno.test("account check-in does not browser-fallback ordinary failures", async () => {
   let leaseCalls = 0;
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () =>
       Promise.resolve(response({
@@ -113,10 +126,41 @@ Deno.test("account check-in does not browser-fallback ordinary failures", async 
   assertEquals(leaseCalls, 0, "lease call count");
 });
 
+Deno.test("account check-in unmasks Turnstile-hidden disabled sites", async () => {
+  // new-api 把 TurnstileCheck 挂在 POST /api/user/checkin 前面,站点未开放签到时
+  // 直连只会回「Turnstile token 为空」。此时用 GET 复核,确认未开放就跳过,
+  // 不启动浏览器。
+  let leaseCalls = 0;
+  let browserCalls = 0;
+  const result = await runCheckin(account, {
+    loadSettings: () => settings(true),
+    directCheckin: () =>
+      Promise.resolve(response({
+        success: false,
+        message: "Turnstile token 为空",
+      })),
+    probeCheckinDisabled: () => Promise.resolve(true),
+    acquireLease: () => {
+      leaseCalls += 1;
+      return Promise.resolve({ acquired: false, waitedMs: 0 });
+    },
+    browserCheckin: () => {
+      browserCalls += 1;
+      throw new Error("browser must not run");
+    },
+  });
+  assertEquals(result.checkinStatus, "unknown", "check-in status");
+  assertEquals(result.taskStatus, "skipped", "task status");
+  assertEquals(result.skipped, true, "skipped flag");
+  assertEquals(result.checkinMethod, "direct", "check-in method");
+  assertEquals(leaseCalls, 0, "lease call count");
+  assertEquals(browserCalls, 0, "browser call count");
+});
+
 Deno.test("account check-in treats upstream disabled reply as skipped", async () => {
   let leaseCalls = 0;
   let browserCalls = 0;
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () =>
       Promise.resolve(response({
@@ -146,7 +190,7 @@ Deno.test("account check-in leaves disabled and busy challenges skipped", async 
       success: false,
       message: "需要 Turnstile 人机验证",
     }));
-  const disabled = await executeAccountCheckin(account, {
+  const disabled = await runCheckin(account, {
     loadSettings: () => settings(false),
     directCheckin: challenge,
   });
@@ -166,7 +210,7 @@ Deno.test("account check-in leaves disabled and busy challenges skipped", async 
     "disabled outcome",
   );
 
-  const busy = await executeAccountCheckin(account, {
+  const busy = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: challenge,
     acquireLease: () => Promise.resolve({ acquired: false, waitedMs: 10_000 }),
@@ -186,7 +230,7 @@ Deno.test("account check-in counts lease wait inside the browser timeout", async
   let browserTimeout = 0;
   let released = false;
   let leaseOptions: unknown = null;
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true, "120"),
     directCheckin: () =>
       Promise.resolve(response({
@@ -228,7 +272,7 @@ Deno.test("account check-in counts lease wait inside the browser timeout", async
 });
 
 Deno.test("started browser failure remains manual-required but fails the task", async () => {
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () =>
       Promise.resolve(response({
@@ -253,7 +297,7 @@ Deno.test("started browser failure remains manual-required but fails the task", 
 });
 
 Deno.test("browser lease infrastructure failure remains manually recoverable", async () => {
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () =>
       Promise.resolve(response({
@@ -279,7 +323,7 @@ Deno.test("browser lease infrastructure failure remains manually recoverable", a
 Deno.test("uncertain browser cleanup quarantines the global lease", async () => {
   let released = false;
   let abandoned = false;
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () =>
       Promise.resolve(response({
@@ -302,7 +346,7 @@ Deno.test("uncertain browser cleanup quarantines the global lease", async () => 
 });
 
 Deno.test("direct transport errors retain the legacy error field", async () => {
-  const result = await executeAccountCheckin(account, {
+  const result = await runCheckin(account, {
     loadSettings: () => settings(true),
     directCheckin: () => Promise.reject(new Error("direct timeout")),
   });

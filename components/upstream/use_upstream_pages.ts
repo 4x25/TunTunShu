@@ -345,6 +345,9 @@ export function useUpstreamPages(
       (scope === "key" && keyPathSearch) ||
       (["um", "models"].includes(scope) && modelPathSearch);
     const refreshAccounts = ["all", "site", "account"].includes(scope) ||
+      // siteOnly 改的是站点;账号列透出的 site_origin/site_checkin_enabled
+      // 都由站点数据派生,所以也要一起刷新(否则签到按钮状态会滞留)。
+      scope === "siteOnly" ||
       (scope === "key" && keyPathSearch) ||
       (["um", "models"].includes(scope) && modelPathSearch);
     const refreshKeys = ["all", "site", "account", "key"].includes(scope) ||

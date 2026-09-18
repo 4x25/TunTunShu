@@ -330,14 +330,18 @@ heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽�
 
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
 日志。站点 `status_data` 为 null(从未检测或标 down 清空)时,签到前先补一次
-`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定。两种「未开放
+`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定。三种「未开放
 签到」信号都直接返回 `unknown`/skipped + `skipped:true`(同时把 `checkin_status`
 清回 `unknown`,避免残留「需手动」),不直连、也不启动浏览器: ①快照里
 `checkin_enabled === false`;②直连 `POST /api/user/checkin` 收到 new-api
 的权威业务回执 `{success:false,message:"签到功能未启用"}`(上游
-`controller/checkin.go`,HTTP 仍为 200)。后者还会把 `checkin_enabled=false`
-合并写回 `sites.status_data`(`markSiteCheckinDisabled`),因此即使 `/api/status`
-不可达,按钮与 cron 也能自己收敛到「未开放」。浏览器成功 →
+`controller/checkin.go`,HTTP 仍为 200);③直连只拿到 challenge 时,再用
+**不带中间件**的 `GET /api/user/checkin` 复核(`probeCheckinDisabled`)。③
+是必需的: new-api 路由是 `GET /checkin` 裸注册、`POST /checkin` 挂
+`middleware.TurnstileCheck()`,所以站点开了 Turnstile 又关着签到时,POST 会先回
+「Turnstile token 为空」,把「签到功能未启用」完全掩盖住。三者都会把
+`checkin_enabled=false` 合并写回 `sites.status_data`(`markSiteCheckinDisabled`),
+因此即使 `/api/status` 不可达,按钮与 cron 也能自己收敛到「未开放」。浏览器成功 →
 `checked`/success;功能关闭或租约 busy → `manual_required`/skipped;浏览器已经
 启动但超时、UI 不兼容或内部失败 → `manual_required`/failed。返回值额外带
 `checkinMethod:'direct'|'browser'` 与脱敏的
@@ -535,7 +539,10 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   与「＋新增统一模型」→ POST
   /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
   a→z。probe-name「自动获取」自动填站点/账号名。上游页所有带悬浮提示的按钮(行操作签到/复制密钥/协议图标/工具栏脚本安装等)统一用
-  daisyUI `tooltip` 组件(`data-tip`,非原生 title);账号「签到」按钮有四种状态:
+  daisyUI `tooltip` 组件(`data-tip`,非原生 title);站点变更(检测/启停/新建编辑)
+  走 `siteOnly`
+  作用域,该作用域也会重拉账号列——`site_origin`/`site_checkin_enabled`
+  由站点数据派生,不重拉会让签到按钮状态滞留。账号「签到」按钮有四种状态:
   ①站点未开放签到(`site_checkin_enabled === false`,来自站点 status_data)→
   置灰禁用 + not-allowed 光标 + 文案「未开放」+ hover tip「站点未开放签到功能」
   (优先于④,不会被 manual_required/failed 覆盖);②可签到 (checkin_status 为

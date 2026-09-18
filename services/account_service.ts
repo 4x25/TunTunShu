@@ -768,6 +768,16 @@ export interface CheckinDependencies {
     auth: NewApiUserAuth,
     signal: AbortSignal,
   ) => Promise<Response>;
+  /**
+   * GET /api/user/checkin 复核站点是否真的开放签到。
+   * new-api 路由把 TurnstileCheck 中间件挂在 POST 上(GET 没有),所以站点未开放
+   * 签到时 POST 会先回「Turnstile token 为空」而非「签到功能未启用」;只有这个
+   * 不带中间件的 GET 才拿得到真实开关。返回 true 表示确认未启用。
+   */
+  probeCheckinDisabled: (
+    auth: NewApiUserAuth,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
   acquireLease: (options: {
     maxWaitMs: number;
     ttlMs: number;
@@ -785,6 +795,14 @@ export interface CheckinDependencies {
 const defaultCheckinDependencies: CheckinDependencies = {
   loadSettings: getSettings,
   directCheckin: (auth, signal) => adapter.checkin(auth, signal),
+  probeCheckinDisabled: async (auth, signal) => {
+    const res = await adapter.getCheckinStatus(auth, signal);
+    if (!res.ok) return false;
+    const body = await res.json().catch(() => null) as
+      | { message?: unknown }
+      | null;
+    return isCheckinDisabledMessage(body?.message);
+  },
   acquireLease: (options) => acquireBrowserCheckinLease(options),
   browserCheckin: runBrowserCheckin,
   now: () => performance.now(),
@@ -872,6 +890,25 @@ export async function executeAccountCheckin(
       taskStatus: "failed",
       checkinMethod: "direct",
       message: direct.message,
+    };
+  }
+
+  // 到这里 direct.kind === "challenge"。new-api 把 TurnstileCheck 中间件挂在
+  // POST /api/user/checkin 上(handler 之前),所以「签到功能未启用」会被
+  // 「Turnstile token 为空」掩盖。用不带该中间件的 GET 复核,避免把未开放签到的
+  // 站点误判成需要浏览器人机验证(白跑 60s 兜底并标记需手动)。
+  const checkinDisabled = await deps.probeCheckinDisabled(
+    accountAuth(account),
+    AbortSignal.timeout(10_000),
+  ).catch(() => false);
+  if (checkinDisabled) {
+    return {
+      ...directBase,
+      checkinStatus: "unknown",
+      taskStatus: "skipped",
+      checkinMethod: "direct",
+      message: `${direct.message}；站点未开放签到功能`,
+      skipped: true,
     };
   }
 
