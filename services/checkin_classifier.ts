@@ -1,4 +1,8 @@
-export type DirectCheckinKind = "checked" | "challenge" | "failed";
+export type DirectCheckinKind =
+  | "checked"
+  | "challenge"
+  | "disabled"
+  | "failed";
 
 export interface DirectCheckinOutcome {
   kind: DirectCheckinKind;
@@ -10,6 +14,11 @@ export interface DirectCheckinInput {
   status: number;
   headers: Headers;
   body: string;
+}
+
+/** 上游业务回执是否明确表示「签到功能未启用」。 */
+export function isCheckinDisabledMessage(message: unknown): boolean {
+  return typeof message === "string" && CHECKIN_DISABLED_MESSAGE.test(message);
 }
 
 export function browserCheckinEnabled(value: string | undefined): boolean {
@@ -24,6 +33,9 @@ export function browserCheckinTimeoutMs(value: string | undefined): number {
 
 const CHECKED_MESSAGE = /已签到|已经签到|已签/;
 const CHALLENGE_MESSAGE = /turnstile|captcha|验证码|人机验证/i;
+// new-api 站点未启用签到时,GET/POST /api/user/checkin 都回 HTTP 200 +
+// {success:false,message:"签到功能未启用"}(controller/checkin.go)。
+const CHECKIN_DISABLED_MESSAGE = /签到功能未启用|签到未启用|签到功能已关闭/;
 const CLOUDFLARE_CHALLENGE_STATUS = new Set([403, 429, 503]);
 const CLOUDFLARE_BODY_MARKER =
   /cf-chl-|challenge-platform|just a moment|attention required|cloudflare ray id|checking (?:your )?browser|enable javascript and cookies/i;
@@ -68,8 +80,10 @@ function isTrustedCloudflareChallenge(input: DirectCheckinInput): boolean {
  * Classify one direct new-api check-in response without side effects.
  *
  * A browser fallback is deliberately limited to an explicit upstream captcha
- * message or a response with trusted Cloudflare challenge signals. Arbitrary
- * HTML and ordinary 4xx/5xx responses remain failures.
+ * message or a response with trusted Cloudflare challenge signals. An upstream
+ * "check-in not enabled" business reply is reported as `disabled` so callers
+ * can record it instead of retrying. Arbitrary HTML and ordinary 4xx/5xx
+ * responses remain failures.
  */
 export function classifyDirectCheckin(
   input: DirectCheckinInput,
@@ -89,6 +103,13 @@ export function classifyDirectCheckin(
       kind: "checked",
       message: parsed.message || "今日已签到",
       quotaAwarded: parsed.quotaAwarded,
+    };
+  }
+  if (parsed && CHECKIN_DISABLED_MESSAGE.test(parsed.message)) {
+    return {
+      kind: "disabled",
+      message: parsed.message || "站点未开放签到功能",
+      quotaAwarded: null,
     };
   }
   if (

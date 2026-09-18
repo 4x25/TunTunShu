@@ -121,7 +121,7 @@ routes/
 islands/         Preact islands(Dashboard/Upstream/Models/Logs/Settings/LoginCard/ThemeToggle)
 components/      Layout、Modal、admin_api.ts(浏览器 API 客户端)、icons、brand_icons、use_url_state
 services/        业务逻辑(被 routes 调用),各自写 system_task_logs
-  checkin_classifier.ts              直连签到结果/可信 Cloudflare challenge 分类 + 浏览器设置归一化
+  checkin_classifier.ts              直连签到结果/未开放签到/可信 Cloudflare challenge 分类 + 浏览器设置归一化
   browser_checkin_service.ts         CloakBrowser 个人中心自动签到与运行时状态
   browser_checkin_lease_service.ts   PostgreSQL 全局浏览器租约(跨 Deploy 实例串行)
 adapters/new_api_adapter.ts   对上游 new-api HTTP 的薄 fetch 封装
@@ -330,13 +330,18 @@ heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽�
 
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
 日志。站点 `status_data` 为 null(从未检测或标 down 清空)时,签到前先补一次
-`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定;站点
-`checkin_enabled === false` 时不直连、也不启动浏览器,直接返回
-`unknown`/skipped + `skipped:true`(同时把 `checkin_status` 清回 `unknown`,
-避免残留「需手动」);浏览器成功 → `checked`/success;功能关闭或租约 busy →
-`manual_required`/skipped;浏览器已经启动但超时、UI 不兼容或内部失败 →
-`manual_required`/failed。返回值额外带 `checkinMethod:'direct'|'browser'`
-与脱敏的 `automation:{attempted,code,durationMs}`;
+`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定。两种「未开放
+签到」信号都直接返回 `unknown`/skipped + `skipped:true`(同时把 `checkin_status`
+清回 `unknown`,避免残留「需手动」),不直连、也不启动浏览器: ①快照里
+`checkin_enabled === false`;②直连 `POST /api/user/checkin` 收到 new-api
+的权威业务回执 `{success:false,message:"签到功能未启用"}`(上游
+`controller/checkin.go`,HTTP 仍为 200)。后者还会把 `checkin_enabled=false`
+合并写回 `sites.status_data`(`markSiteCheckinDisabled`),因此即使 `/api/status`
+不可达,按钮与 cron 也能自己收敛到「未开放」。浏览器成功 →
+`checked`/success;功能关闭或租约 busy → `manual_required`/skipped;浏览器已经
+启动但超时、UI 不兼容或内部失败 → `manual_required`/failed。返回值额外带
+`checkinMethod:'direct'|'browser'` 与脱敏的
+`automation:{attempted,code,durationMs}`;
 PAT、fragment、二进制路径和许可证不得进入 API 或日志。
 
 ## AI SDK test path(services/upstream_model_test_service.ts)
@@ -436,9 +441,13 @@ Key 顺带拉模型,存量 Key 由 `api_key_model_sync` cron
 best-effort 调 `GET /api/user/checkin`,按 new-api 前端
 同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
 true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
-`failed`);功能未启用/上游 success:false/字段缺失/请求失败时不动本地签到状态,
-日志 message 追加 `checked_in_today=true|false|na`。已签到时还会把今日记录
-(records 中最大 checkin_date 那条的 `checkin_date`/`quota_awarded`)写入
+`failed`);上游明确回执「签到功能未启用」时改判 `unknown`、清空
+`checkin_date/checkin_quota`,并把 `checkin_enabled=false` 合并写回
+`sites.status_data`(`markSiteCheckinDisabled`)——所以账号「检测」本身就能让
+按钮从「需手动」变回「未开放」;其它 上游 success:false/字段缺失/请求失败时
+不动本地签到状态,日志 message 追加 `checked_in_today=true|false|na`(未开放时为
+`checkin_disabled=true`)。已签到时 还会把今日记录 (records 中最大 checkin_date
+那条的 `checkin_date`/`quota_awarded`)写入
 `accounts.checkin_date/checkin_quota`,未签到时清空;`checkinAccount` 签到成功后
 同样 best-effort 回拉今日记录落库。账号列表额外透出 `site_checkin_enabled`(来自
 `sites.status_data.checkin_enabled`,null=未知)供 前端签到按钮门禁。
@@ -449,7 +458,9 @@ true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_
 (`isNewApiStatusData`:version/start_time/system_name/quota_per_unit/
 email_verification 至少命中 2 项);不再用「非 404 且 <500」的纯状态码判定。
 命中时把整个 data 负载写入 `sites.status_data` 缓存,失败/异常时置 null 并标
-down。
+down;`markSiteCheckinDisabled`(`site_service.ts`)则基于上游业务回执把
+`checkin_enabled=false` **合并**进现有快照(`coalesce(status_data,'{}') || ...`),
+不会清掉其它字段。
 
 `account_api_key_sync` 任务类型**无独立 cron**(jobs/ 中无对应 job):自动拉 Key
 已并入 账号数据同步 cron(`syncAccount`
@@ -629,13 +640,14 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
   HTTP(S) origin 校验、fragment 凭据编码,以及登录链接仅在脚本就绪且 Origin
   合法时携带 PAT。
-- `services/checkin_classifier_test.ts`:覆盖直连成功/普通失败/明确 captcha
-  与可信 Cloudflare challenge 分类,以及浏览器开关/超时安全归一化。
+- `services/checkin_classifier_test.ts`:覆盖直连成功/普通失败/站点未开放签到
+  (`disabled`)/明确 captcha 与可信 Cloudflare challenge 分类,以及浏览器开关/
+  超时安全归一化。
 - `services/browser_checkin_lease_service_test.ts`:用内存 lease store +
   注入时钟覆盖 busy 等待、heartbeat、owner-only release 和优雅退出释放。
 - `services/account_checkin_test.ts` + `jobs/account_checkin_job_test.ts`:覆盖
-  direct fast path、fallback 门禁、租约等待计入预算、浏览器成功/失败与批任务
-  success/failed/skipped 分类。
+  direct fast path、fallback 门禁、租约等待计入预算、浏览器成功/失败、站点未
+  开放签到时 skipped(不触发浏览器)与批任务 success/failed/skipped 分类。
 - `services/settings_service_test.ts`:覆盖浏览器开关与 30–120s timeout 在 DB
   读写边界的规范化规则。
 - `lib/browser_checkin_security_test.ts`:覆盖纯公网 HTTP(S) origin 门禁与常见

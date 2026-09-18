@@ -260,6 +260,21 @@ export async function healthCheckSite(id: number) {
   }
 }
 
+/**
+ * 记录「站点未开放签到」。依据是上游 /api/user/checkin 的权威业务回执
+ * (`签到功能未启用`),比 /api/status 快照更可靠;合并写回 status_data,
+ * 保留已有字段,供账号列表置灰按钮与 cron 筛选使用。
+ */
+export async function markSiteCheckinDisabled(siteId: number) {
+  const sql = getSql();
+  await sql`
+    update sites
+    set status_data = coalesce(status_data, '{}'::jsonb) || '{"checkin_enabled": false}'::jsonb,
+        updated_at = now()
+    where id = ${siteId}
+  `;
+}
+
 export async function deleteSite(id: number) {
   const sql = getSql();
   const accounts = await sql<

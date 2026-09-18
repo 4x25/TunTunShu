@@ -80,6 +80,11 @@ Deno.test("direct check-in classifier rejects untrusted HTML and ordinary errors
   assertEquals(
     classify(JSON.stringify({ success: false, message: "签到功能未启用" }))
       .kind,
+    "disabled",
+    "check-in disabled business reply",
+  );
+  assertEquals(
+    classify(JSON.stringify({ success: false, message: "上游维护中" })).kind,
     "failed",
     "business failure",
   );

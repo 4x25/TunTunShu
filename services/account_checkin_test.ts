@@ -101,7 +101,7 @@ Deno.test("account check-in does not browser-fallback ordinary failures", async 
     directCheckin: () =>
       Promise.resolve(response({
         success: false,
-        message: "签到功能未启用",
+        message: "上游维护中",
       })),
     acquireLease: () => {
       leaseCalls += 1;
@@ -111,6 +111,33 @@ Deno.test("account check-in does not browser-fallback ordinary failures", async 
   assertEquals(result.checkinStatus, "failed", "check-in status");
   assertEquals(result.checkinMethod, "direct", "check-in method");
   assertEquals(leaseCalls, 0, "lease call count");
+});
+
+Deno.test("account check-in treats upstream disabled reply as skipped", async () => {
+  let leaseCalls = 0;
+  let browserCalls = 0;
+  const result = await executeAccountCheckin(account, {
+    loadSettings: () => settings(true),
+    directCheckin: () =>
+      Promise.resolve(response({
+        success: false,
+        message: "签到功能未启用",
+      })),
+    acquireLease: () => {
+      leaseCalls += 1;
+      return Promise.resolve({ acquired: false, waitedMs: 0 });
+    },
+    browserCheckin: () => {
+      browserCalls += 1;
+      throw new Error("browser must not run");
+    },
+  });
+  assertEquals(result.checkinStatus, "unknown", "check-in status");
+  assertEquals(result.taskStatus, "skipped", "task status");
+  assertEquals(result.skipped, true, "skipped flag");
+  assertEquals(result.checkinMethod, "direct", "check-in method");
+  assertEquals(leaseCalls, 0, "lease call count");
+  assertEquals(browserCalls, 0, "browser call count");
 });
 
 Deno.test("account check-in leaves disabled and busy challenges skipped", async () => {

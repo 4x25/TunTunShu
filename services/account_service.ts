@@ -6,12 +6,17 @@ import {
 import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
-import { healthCheckSite, isUniqueViolation } from "./site_service.ts";
+import {
+  healthCheckSite,
+  isUniqueViolation,
+  markSiteCheckinDisabled,
+} from "./site_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
 import {
   browserCheckinEnabled,
   browserCheckinTimeoutMs,
   classifyDirectCheckin,
+  isCheckinDisabledMessage,
 } from "./checkin_classifier.ts";
 import {
   acquireBrowserCheckinLease,
@@ -397,6 +402,8 @@ export interface TodayCheckinInfo {
   checkedToday: boolean | null;
   /** 已签到时取 records 中最大 checkin_date 的那条;未签到为 null。 */
   record: TodayCheckinRecord | null;
+  /** 上游明确回执「签到功能未启用」,此时 checkedToday 无意义。 */
+  disabled: boolean;
 }
 
 /**
@@ -421,6 +428,7 @@ async function fetchTodayCheckin(
     const body = await res.json().catch(() => null) as
       | {
         success?: unknown;
+        message?: unknown;
         data?: {
           stats?: {
             checked_in_today?: unknown;
@@ -429,7 +437,13 @@ async function fetchTodayCheckin(
         };
       }
       | null;
-    if (body?.success !== true) return null;
+    // 站点未开放签到时上游回 {success:false,message:"签到功能未启用"};
+    // 与其它失败区分开,供调用方落库标记。
+    if (body?.success !== true) {
+      return isCheckinDisabledMessage(body?.message)
+        ? { checkedToday: null, record: null, disabled: true }
+        : null;
+    }
     const stats = body.data?.stats;
     const checked = stats?.checked_in_today;
     if (checked !== true && checked !== false) return null;
@@ -448,7 +462,7 @@ async function fetchTodayCheckin(
         }
       }
     }
-    return { checkedToday: checked, record };
+    return { checkedToday: checked, record, disabled: false };
   } catch {
     return null;
   }
@@ -503,13 +517,21 @@ export async function syncAccountData(id: number) {
     const ok = response.ok && data.success === true;
     const status = ok ? quota === 0 ? "quota_empty" : "healthy" : "invalid";
     let message = JSON.stringify(data).slice(0, 1000);
-    let checkinStatus: "checked" | "unchecked" | null = null;
+    let checkinStatus: "checked" | "unchecked" | "unknown" | null = null;
     // 今日签到记录:已签到时为今日 date/quota;未签到时清空;拿不到定论时保留原值。
     let checkinDate: string | null = account.checkin_date;
     let checkinQuota: string | number | null = account.checkin_quota;
     if (ok) {
       const info = await fetchTodayCheckin(auth);
-      if (info === null || info.checkedToday === null) {
+      if (info?.disabled) {
+        // 上游明确「签到功能未启用」:落站点快照并清掉本系统自标的
+        // manual_required/failed,避免按钮继续显示「需手动」。
+        await markSiteCheckinDisabled(account.site_id).catch(() => undefined);
+        checkinStatus = "unknown";
+        checkinDate = null;
+        checkinQuota = null;
+        message += " checkin_disabled=true";
+      } else if (info === null || info.checkedToday === null) {
         message += " checked_in_today=na";
       } else if (info.checkedToday) {
         checkinStatus = "checked";
@@ -831,6 +853,18 @@ export async function executeAccountCheckin(
       message: direct.message,
     };
   }
+  if (direct.kind === "disabled") {
+    // 站点未开放签到:不重试、不进浏览器;标记 skipped 并由 checkinAccount
+    // 把 checkin_enabled=false 落回站点快照。
+    return {
+      ...directBase,
+      checkinStatus: "unknown",
+      taskStatus: "skipped",
+      checkinMethod: "direct",
+      message: direct.message,
+      skipped: true,
+    };
+  }
   if (direct.kind === "failed") {
     return {
       ...directBase,
@@ -1015,6 +1049,11 @@ export async function checkinAccount(
     origin: account.origin,
     site_checkin_enabled: siteCheckinEnabled,
   });
+  // 站点未开放签到时把 checkin_enabled=false 落回站点快照:账号列表会置灰按钮,
+  // 后续 cron 也直接跳过(不依赖 /api/status 是否可达)。
+  if (result.skipped) {
+    await markSiteCheckinDisabled(account.site_id).catch(() => undefined);
+  }
   // One invocation produces exactly one final log, even when direct check-in
   // falls back to the browser. Attempts are summarized in message/automation.
   const logId = await createSystemTaskLog({
