@@ -329,7 +329,9 @@ heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽�
 只有全部确认退出才删除 lease；否则仅停 heartbeat、由 TTL 隔离。
 
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
-日志。站点 `checkin_enabled === false` 时不直连、也不启动浏览器,直接返回
+日志。站点 `status_data` 为 null(从未检测或标 down 清空)时,签到前先补一次
+`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定;站点
+`checkin_enabled === false` 时不直连、也不启动浏览器,直接返回
 `unknown`/skipped + `skipped:true`(同时把 `checkin_status` 清回 `unknown`,
 避免残留「需手动」);浏览器成功 → `checked`/success;功能关闭或租约 busy →
 `manual_required`/skipped;浏览器已经启动但超时、UI 不兼容或内部失败 →
@@ -460,8 +462,9 @@ await,捕获单个错误计为 failed (不中断整批),返回
 `manual_required` 且浏览器未启动(功能关闭/全局租约繁忙)计为
 skipped,浏览器已启动但失败计为 failed;`skipped:true`(站点未开放签到)同样计为
 skipped。`runAccountCheckinJob` 只选取站点 `checkin_enabled !== false`
-的启用账号(未知/未缓存按可签到处理)。**system_task_logs 由 service 层写,不是
-runner。**
+的启用账号,并在开头按站点去重地对 `status_data` 为 null 的站点补一次健康检查,
+再按新快照筛选(仍未取到快照的按可签到处理,且逐个账号不再重复检测)。
+**system_task_logs 由 service 层写,不是 runner。**
 
 **账号刷新编排**:`POST /api/accounts` 与 `PATCH /api/accounts/:id` 在
 upsert/更新后

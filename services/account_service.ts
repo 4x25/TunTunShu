@@ -6,7 +6,7 @@ import {
 import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 import { syncApiKeyModels } from "./api_key_service.ts";
-import { isUniqueViolation } from "./site_service.ts";
+import { healthCheckSite, isUniqueViolation } from "./site_service.ts";
 import type { CheckinStatus } from "../types/enums.ts";
 import {
   browserCheckinEnabled,
@@ -971,7 +971,10 @@ export async function executeAccountCheckin(
   };
 }
 
-export async function checkinAccount(id: number) {
+export async function checkinAccount(
+  id: number,
+  options: { refreshSiteSnapshot?: boolean } = {},
+) {
   const sql = getSql();
   const rows = await sql<
     {
@@ -981,17 +984,37 @@ export async function checkinAccount(id: number) {
       access_token: string;
       origin: string;
       site_checkin_enabled: boolean | null;
+      site_status_missing: boolean;
     }[]
   >`
     select accounts.id, accounts.site_id, accounts.user_id, accounts.access_token, sites.origin,
-      (sites.status_data->>'checkin_enabled')::boolean as site_checkin_enabled
+      (sites.status_data->>'checkin_enabled')::boolean as site_checkin_enabled,
+      (sites.status_data is null) as site_status_missing
     from accounts
     join sites on sites.id = accounts.site_id
     where accounts.id = ${id}
   `;
   const account = rows[0];
   if (!account) return null;
-  const result = await executeAccountCheckin(account);
+  // 站点还没有 status_data 快照(从未检测或被清空)时,签到前先补一次健康检查
+  // 并落库,再按新快照决定是否签到;检测失败则维持未知(继续尝试)。
+  let siteCheckinEnabled = account.site_checkin_enabled;
+  if (account.site_status_missing && (options.refreshSiteSnapshot ?? true)) {
+    await healthCheckSite(account.site_id).catch(() => undefined);
+    const fresh = await sql<{ site_checkin_enabled: boolean | null }[]>`
+      select (status_data->>'checkin_enabled')::boolean as site_checkin_enabled
+      from sites where id = ${account.site_id}
+    `;
+    siteCheckinEnabled = fresh[0]?.site_checkin_enabled ?? null;
+  }
+  const result = await executeAccountCheckin({
+    id: account.id,
+    site_id: account.site_id,
+    user_id: account.user_id,
+    access_token: account.access_token,
+    origin: account.origin,
+    site_checkin_enabled: siteCheckinEnabled,
+  });
   // One invocation produces exactly one final log, even when direct check-in
   // falls back to the browser. Attempts are summarized in message/automation.
   const logId = await createSystemTaskLog({
