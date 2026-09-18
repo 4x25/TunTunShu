@@ -561,10 +561,12 @@ export async function syncAccountData(id: number) {
       accountId: account.id,
       message,
     });
+    // 同 site_service.status_data:用 ::text::jsonb 避免驱动把参数按 jsonb 再
+    // 序列化一次,把缓存存成 jsonb 字符串。
     await sql`
       update accounts
       set quota = ${quota}, used_quota = ${usedQuota}, status = ${status},
-          user_data = ${ok ? JSON.stringify(payload) : null}::jsonb,
+          user_data = ${ok ? JSON.stringify(payload) : null}::text::jsonb,
           checkin_status = ${checkinStatus ?? account.checkin_status},
           checkin_date = ${checkinDate},
           checkin_quota = ${checkinQuota},

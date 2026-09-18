@@ -240,10 +240,15 @@ export async function healthCheckSite(id: number) {
       siteId: id,
       message: `http_status=${response.status} new_api=${isHealthy}`,
     });
+    // 用 ::text::jsonb 而不是 ::jsonb:后者会让 Postgres 把参数类型推断为 jsonb,
+    // postgres 驱动随即对参数再 JSON.stringify 一次(serializers[3802]),把 JSON
+    // 文本**双重编码**成 jsonb 字符串,于是 `status_data->>'checkin_enabled'` 恒为
+    // NULL(签到按钮的「未开放」门禁因此永远不生效)。::text 先把参数固定为文本
+    // (驱动原样发送),再由 jsonb 解析成真正的对象。
     await sql`
       update sites
       set status = ${status},
-          status_data = ${isHealthy ? JSON.stringify(data) : null}::jsonb,
+          status_data = ${isHealthy ? JSON.stringify(data) : null}::text::jsonb,
           last_health_check_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;

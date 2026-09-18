@@ -383,6 +383,16 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   catch 23505 (`isUniqueViolation`)。
 - **持久化范式**:service 函数直接 `getSql()` + 标签模板 SQL。`db/repositories/`
   与 `db/schema/tables.ts` 是未使用的空壳。
+- **jsonb 写入约定(重要)**:写 jsonb 缓存时**必须**用
+  `${JSON.stringify(x)}::text::jsonb`,**不能**用 `${JSON.stringify(x)}::jsonb`。
+  postgres 驱动会先 `Describe` 拿到 Postgres 推断的参数类型,再按
+  `serializers[oid]` 序列化参数(`Bind` 里 `options.serializers[type](x)`); jsonb
+  的 serializer 就是 `JSON.stringify`。所以 `::jsonb` 会让参数被推断为
+  jsonb,字符串再被 stringify 一次——存进去的是 jsonb **字符串**而非对象,
+  `col->>'key'` 恒为 NULL(也不报错,极难发现)。显式 `::text::jsonb` 把参数固定为
+  text(驱动原样发送),再由 jsonb 解析成对象。 `db/init.ts`
+  启动时会幂等修复历史脏数据(`repairJsonCache`:把 jsonb `string` 与「被 `||`
+  合并后变成的 `array`」都还原成对象)。
 
 ### Tables & status enums(types/enums.ts)
 
@@ -652,6 +662,8 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `services/checkin_classifier_test.ts`:覆盖直连成功/普通失败/站点未开放签到
   (`disabled`)/明确 captcha 与可信 Cloudflare challenge 分类,以及浏览器开关/
   超时安全归一化。
+- `db/init_test.ts`:覆盖 `repairJsonCache` 对双重编码 jsonb 字符串、“被 `||`
+  合并后变成的数组”与不可恢复输入的还原规则。
 - `services/browser_checkin_lease_service_test.ts`:用内存 lease store +
   注入时钟覆盖 busy 等待、heartbeat、owner-only release 和优雅退出释放。
 - `services/account_checkin_test.ts` + `jobs/account_checkin_job_test.ts`:覆盖

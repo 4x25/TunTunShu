@@ -1,5 +1,38 @@
 import { getSql } from "./client.ts";
 
+/**
+ * 把「被双重编码」的 jsonb 缓存还原成对象(供 initializeDatabase 的历史数据修复)。
+ *
+ * 历史 bug:写入用的是 `${JSON.stringify(x)}::jsonb`,而 postgres 驱动会按
+ * Postgres 推断出的参数类型(jsonb)把参数**再** JSON.stringify 一次,于是存进去的
+ * 是 jsonb **字符串**而不是对象,`status_data->>'checkin_enabled'` 之类取值恒为
+ * NULL。若这种值之后又被 `coalesce(...) || '{"..."}'::jsonb` 合并过,还会变成
+ * 数组 `["<json 文本>", {...}]`。
+ *
+ * 这里两种形态都还原:逐个解析可解析的元素(字符串先 JSON.parse),按顺序合并成
+ * 一个对象;完全没有可解析对象时返回 undefined(表示不该改动该行)。
+ */
+export function repairJsonCache(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  const candidates = Array.isArray(value) ? value : [value];
+  let merged: Record<string, unknown> | undefined;
+  for (const candidate of candidates) {
+    let parsed: unknown = candidate;
+    if (typeof candidate === "string") {
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        continue;
+      }
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      merged = { ...(merged ?? {}), ...(parsed as Record<string, unknown>) };
+    }
+  }
+  return merged;
+}
+
 export async function initializeDatabase() {
   const sql = getSql();
   await sql`
@@ -182,4 +215,39 @@ export async function initializeDatabase() {
       updated_at timestamptz not null default now()
     )
   `;
+  // 修复历史脏数据(幂等):`sites.status_data` / `accounts.user_data` 曾被双重
+  // 编码成 jsonb 字符串(详见 repairJsonCache),导致 `status_data->>'checkin_enabled'`
+  // 恒为 NULL、账号签到按钮的「未开放」门禁永远不生效。这里就地还原成对象。
+  try {
+    const brokenSites = await sql<{ id: number; data: unknown }[]>`
+      select id, status_data as data from sites
+      where status_data is not null
+        and jsonb_typeof(status_data) in ('string', 'array')
+    `;
+    for (const row of brokenSites) {
+      const fixed = repairJsonCache(row.data);
+      if (!fixed) continue;
+      await sql`
+        update sites
+        set status_data = ${JSON.stringify(fixed)}::text::jsonb
+        where id = ${row.id}
+      `;
+    }
+    const brokenAccounts = await sql<{ id: number; data: unknown }[]>`
+      select id, user_data as data from accounts
+      where user_data is not null
+        and jsonb_typeof(user_data) in ('string', 'array')
+    `;
+    for (const row of brokenAccounts) {
+      const fixed = repairJsonCache(row.data);
+      if (!fixed) continue;
+      await sql`
+        update accounts
+        set user_data = ${JSON.stringify(fixed)}::text::jsonb
+        where id = ${row.id}
+      `;
+    }
+  } catch (error) {
+    console.warn("[init] 修复双重编码的 jsonb 缓存失败:", error);
+  }
 }
