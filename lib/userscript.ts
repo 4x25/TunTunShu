@@ -3,7 +3,7 @@
  *
  * 它把原「快捷录入」与「上游账号免登」两个脚本合并为一份:
  *
- * - 页面右下角只有一个小胶囊按钮,按状态展示:
+ * - 页面左下角只有一个小胶囊按钮,按状态展示:
  *   - 免登状态 → 「免登中（用户名）」,点击后 `confirm` 确认再退出免登;
  *   - 其他状态 → 「快捷录入」,点击执行录入,过程用分步进度条展示;
  * - 免登前置逻辑(退出现有登录态、校验令牌)与快捷录入共用同一个胶囊按钮的
@@ -21,7 +21,7 @@
 import { buildUpstreamLoginRuntimeSource } from "./upstream_login_userscript.ts";
 
 /** 合并后的「囤囤鼠脚本」版本(同时作为免登 marker 版本)。 */
-export const TUNTUNSHU_SCRIPT_VERSION = "2.0.1";
+export const TUNTUNSHU_SCRIPT_VERSION = "2.0.2";
 
 export function buildUserScript(
   opts: { baseUrl: string; authKey: string },
@@ -104,12 +104,13 @@ export function buildUserScript(
     }
 
     // 把记录的 left/top 应用回胶囊;越界时向内收,保证按钮始终可见。
+    // 没有记录(首次注入)时默认停在页面左下角。
     function applyPosition(pos) {
       if (!button) return;
       if (!pos) {
-        button.style.left = "auto";
+        button.style.left = "20px";
         button.style.top = "auto";
-        button.style.right = "20px";
+        button.style.right = "auto";
         button.style.bottom = "20px";
         return;
       }
@@ -205,7 +206,7 @@ export function buildUserScript(
       button.type = "button";
       button.title = "囤囤鼠脚本";
       button.style.cssText =
-        "position:fixed;right:20px;bottom:20px;z-index:2147483647;" +
+        "position:fixed;left:20px;bottom:20px;z-index:2147483647;" +
         "overflow:hidden;padding:10px 18px;border:none;border-radius:999px;" +
         "cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;" +
         "color:#fff;font:600 13px/1 system-ui,-apple-system," +

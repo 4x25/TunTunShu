@@ -597,6 +597,9 @@ Deno.test("小胶囊支持拖拽并把位置记录到 sessionStorage", async () 
     localUser: JSON.stringify({ id: 7, username: "legacy" }),
   });
   const button = harness.getCapsuleButton();
+  // 固定起始坐标,让拖拽断言与默认停靠位置解耦。
+  button.style.left = "0px";
+  button.style.top = "0px";
   button.dispatch("pointerdown", {
     button: 0,
     pointerId: 1,
@@ -645,6 +648,22 @@ Deno.test("小胶囊从 sessionStorage 恢复拖拽位置", async () => {
   assertEquals(button.style.top, "80px", "stored top not restored");
 });
 
+Deno.test("小胶囊初始停靠页面左下角", async () => {
+  const harness = await createHarness({
+    localUser: JSON.stringify({ id: 7, username: "legacy" }),
+  });
+  const button = harness.getCapsuleButton();
+  assertEquals(button.style.left, "20px", "default left mismatch");
+  assertEquals(button.style.bottom, "20px", "default bottom mismatch");
+  assertEquals(button.style.right, "auto", "default right must be released");
+  assertEquals(button.style.top, "auto", "default top must be released");
+  assertEquals(
+    harness.getStoredCapsulePos(),
+    null,
+    "default position must not be persisted",
+  );
+});
+
 Deno.test("合并后的囤囤鼠脚本元数据与胶囊文案正确且可执行", () => {
   const source = buildUserScript({
     baseUrl: "https://tuntunshu.example",
@@ -653,7 +672,7 @@ Deno.test("合并后的囤囤鼠脚本元数据与胶囊文案正确且可执行
   for (
     const directive of [
       "// @name         囤囤鼠脚本",
-      "// @version      2.0.1",
+      "// @version      2.0.2",
       "// @match        *://*/*",
       "// @grant        GM_xmlhttpRequest",
       "// @connect      tuntunshu.example",

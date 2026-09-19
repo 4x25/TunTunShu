@@ -565,11 +565,12 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
   `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「囤囤鼠脚本」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装合并后的
-  唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.1`),它同时提供「快捷录入」与 「上游
-  PAT 免登」。脚本在页面右下角注入唯一的小胶囊按钮:免登状态显示
+  唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.2`),它同时提供「快捷录入」与 「上游
+  PAT 免登」。脚本在页面左下角注入唯一的小胶囊按钮:免登状态显示
   「免登中(用户名)」,点击后 `confirm` 确认再退出;其他状态显示「快捷录入」;
-  录入或免登前置进行中则按步骤显示文案与进度条。小胶囊支持拖拽移动,位置写入
-  当前标签的 `sessionStorage["tts-capsule-pos"]`(越界自动收回,同标签导航后沿用;
+  录入或免登前置进行中则按步骤显示文案与进度条。小胶囊初始停靠左下角(20px),
+  支持拖拽移动,位置写入当前标签的
+  `sessionStorage["tts-capsule-pos"]`(越界自动收回,同标签导航后沿用;
   拖拽结束的那次 click 被丢弃,不会误触录入/退出)。脚本以
   `@grant GM_xmlhttpRequest` + `@inject-into page` + `@run-at document-start`
   注入,跨域调囤囤鼠 API 走 `GM_xmlhttpRequest`,页面 realm 用
@@ -588,7 +589,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **上游账号 PAT 免登**:账号行「登录」渲染为真实
   `<a target="_blank"
   rel="noopener noreferrer">`:仅当当前页检测到脚本同步暴露的
-  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.1"`
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.2"`
   (`buildAccountLoginHref`)时才把
   `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...` 写入
   href,交给浏览器原生新标签打开(支持中键/右键复制链接);未安装或版本不符时
@@ -730,7 +731,7 @@ Fresh
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。合并后只保留这一个脚本路由。
 - 脚本源码包含通用免登逻辑与自身安装/更新 URL;PAT/userId 仅在页面检测到脚本
-  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.1"`)后,才进入账号
+  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.2"`)后,才进入账号
   「登录」链接 href 的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
 - 版本号:UI 页脚/登录页显示 `v1.5.0`,合并后的「囤囤鼠脚本」独立
-  `@version 2.0.1`;`deno.json` 无 version 字段。
+  `@version 2.0.2`;`deno.json` 无 version 字段。

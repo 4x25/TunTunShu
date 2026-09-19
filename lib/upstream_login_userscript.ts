@@ -60,7 +60,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
     ? unsafeWindow
     : globalThis;
 
-  var SCRIPT_VERSION = "2.0.1";
+  var SCRIPT_VERSION = "2.0.2";
   var MARKER = "__TTS_UPSTREAM_LOGIN_SCRIPT__";
   // 合并后的「囤囤鼠脚本」会注入 TTS_UPSTREAM_UI,用于把退出现有登录态、
   // 验证令牌等步骤的进度显示到页面小胶囊按钮;CloakBrowser automation 没有该

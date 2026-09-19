@@ -627,7 +627,7 @@ Deno.test("upstream login runtime 普通页面保持惰性", async () => {
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "2.0.1",
+    "2.0.2",
     "script marker mismatch",
   );
   assert(harness.sandbox.fetch === originalFetch, "inert page patched fetch");
@@ -1430,7 +1430,7 @@ Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", asyn
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "2.0.1",
+    "2.0.2",
     "automation runtime marker mismatch",
   );
   for (
