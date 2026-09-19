@@ -517,7 +517,7 @@ export async function syncAccountData(id: number) {
     const ok = response.ok && data.success === true;
     const status = ok ? quota === 0 ? "quota_empty" : "healthy" : "invalid";
     let message = JSON.stringify(data).slice(0, 1000);
-    let checkinStatus: "checked" | "unchecked" | "unknown" | null = null;
+    let checkinStatus: CheckinStatus | null = null;
     // 今日签到记录:已签到时为今日 date/quota;未签到时清空;拿不到定论时保留原值。
     let checkinDate: string | null = account.checkin_date;
     let checkinQuota: string | number | null = account.checkin_quota;
@@ -527,7 +527,7 @@ export async function syncAccountData(id: number) {
         // 上游明确「签到功能未启用」:落站点快照并清掉本系统自标的
         // manual_required/failed,避免按钮继续显示「需手动」。
         await markSiteCheckinDisabled(account.site_id).catch(() => undefined);
-        checkinStatus = "unknown";
+        checkinStatus = "disabled";
         checkinDate = null;
         checkinQuota = null;
         message += " checkin_disabled=true";
@@ -833,7 +833,7 @@ export async function executeAccountCheckin(
   // 站点明确未开放签到时直接跳过,不直连、也不启动浏览器。
   if (account.site_checkin_enabled === false) {
     return {
-      checkinStatus: "unknown",
+      checkinStatus: "disabled",
       taskStatus: "skipped",
       checkinMethod: "direct",
       message: "站点未开放签到功能",
@@ -878,7 +878,7 @@ export async function executeAccountCheckin(
     // 把 checkin_enabled=false 落回站点快照。
     return {
       ...directBase,
-      checkinStatus: "unknown",
+      checkinStatus: "disabled",
       taskStatus: "skipped",
       checkinMethod: "direct",
       message: direct.message,
@@ -906,7 +906,7 @@ export async function executeAccountCheckin(
   if (checkinDisabled) {
     return {
       ...directBase,
-      checkinStatus: "unknown",
+      checkinStatus: "disabled",
       taskStatus: "skipped",
       checkinMethod: "direct",
       message: `${direct.message}；站点未开放签到功能`,
@@ -1104,9 +1104,12 @@ export async function checkinAccount(
   });
   // 签到成功后 best-effort 回拉今日记录(日期/收获额度),供前端「已签到」tip 使用;
   // 拉不到时置空,后续账号数据同步会补上。
+  // 只有「确实签到成功」才写这两列:其它结果(需手动/失败/未开放)既不再代表今日
+  // 记录,也不该把 syncAccountData 刚拉到的日期/额度清空。
+  const checkedNow = result.checkinStatus === "checked";
   let checkinDate: string | null = null;
   let checkinQuota: number | null = null;
-  if (result.checkinStatus === "checked") {
+  if (checkedNow) {
     const info = await fetchTodayCheckin(accountAuth(account)).catch(() =>
       null
     );
@@ -1115,7 +1118,20 @@ export async function checkinAccount(
       checkinQuota = info.record?.quota_awarded ?? null;
     }
   }
-  await sql`update accounts set checkin_status = ${result.checkinStatus}, checkin_date = ${checkinDate}, checkin_quota = ${checkinQuota}, last_checkin_log_id = ${logId}, updated_at = now() where id = ${id}`;
+  await sql`
+    update accounts
+    set checkin_status = ${result.checkinStatus},
+        checkin_date = case
+          when ${checkedNow}::boolean then ${checkinDate}::text
+          else checkin_date
+        end,
+        checkin_quota = case
+          when ${checkedNow}::boolean then ${checkinQuota}::bigint
+          else checkin_quota
+        end,
+        last_checkin_log_id = ${logId}, updated_at = now()
+    where id = ${id}
+  `;
   return {
     ok: result.checkinStatus === "checked",
     ...(result.status === undefined ? {} : { status: result.status }),

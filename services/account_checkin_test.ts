@@ -83,7 +83,7 @@ Deno.test("account check-in skips sites without check-in enabled", async () => {
       },
     },
   );
-  assertEquals(result.checkinStatus, "unknown", "check-in status");
+  assertEquals(result.checkinStatus, "disabled", "check-in status");
   assertEquals(result.taskStatus, "skipped", "task status");
   assertEquals(result.skipped, true, "skipped flag");
   assertEquals(directCalls, 0, "direct check-in call count");
@@ -149,7 +149,7 @@ Deno.test("account check-in unmasks Turnstile-hidden disabled sites", async () =
       throw new Error("browser must not run");
     },
   });
-  assertEquals(result.checkinStatus, "unknown", "check-in status");
+  assertEquals(result.checkinStatus, "disabled", "check-in status");
   assertEquals(result.taskStatus, "skipped", "task status");
   assertEquals(result.skipped, true, "skipped flag");
   assertEquals(result.checkinMethod, "direct", "check-in method");
@@ -176,7 +176,7 @@ Deno.test("account check-in treats upstream disabled reply as skipped", async ()
       throw new Error("browser must not run");
     },
   });
-  assertEquals(result.checkinStatus, "unknown", "check-in status");
+  assertEquals(result.checkinStatus, "disabled", "check-in status");
   assertEquals(result.taskStatus, "skipped", "task status");
   assertEquals(result.skipped, true, "skipped flag");
   assertEquals(result.checkinMethod, "direct", "check-in method");

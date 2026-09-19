@@ -13,6 +13,7 @@ export const checkinStatuses = [
   "unknown",
   "checked",
   "unchecked",
+  "disabled",
   "manual_required",
   "failed",
 ] as const;

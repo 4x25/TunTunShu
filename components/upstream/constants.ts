@@ -26,6 +26,7 @@ export const STATUS_MAP: Record<string, [string, string]> = {
 export const CHECKIN_MAP: Record<string, [string, string]> = {
   checked: ["ok", "已签到"],
   unchecked: ["mute", "未签到"],
+  disabled: ["mute", "未开放"],
   failed: ["bad", "签到失败"],
   manual_required: ["warn", "需手动"],
   unknown: ["mute", "未知"],

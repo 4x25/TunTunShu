@@ -331,8 +331,8 @@ heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽�
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
 日志。站点 `status_data` 为 null(从未检测或标 down 清空)时,签到前先补一次
 `healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定。三种「未开放
-签到」信号都直接返回 `unknown`/skipped + `skipped:true`(同时把 `checkin_status`
-清回 `unknown`,避免残留「需手动」),不直连、也不启动浏览器: ①快照里
+签到」信号都直接返回 `disabled`/skipped + `skipped:true`(同时把 `checkin_status`
+标为 `disabled`,避免残留「需手动」),不直连、也不启动浏览器: ①快照里
 `checkin_enabled === false`;②直连 `POST /api/user/checkin` 收到 new-api
 的权威业务回执 `{success:false,message:"签到功能未启用"}`(上游
 `controller/checkin.go`,HTTP 仍为 200);③直连只拿到 challenge 时,再用
@@ -401,7 +401,9 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   标志性字段时落库的 `/api/status` data 负载缓存, 判为 down
   时清空(见下「站点健康检查判定」)。
 - `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
-  unknown | checked | unchecked | manual_required | failed;`accounts.user_data`
+  unknown | checked | unchecked | disabled | manual_required | failed(`disabled`
+  表示上游权威回执确认站点未开放签到,与 `unknown` 的
+  「未知/拿不到定论」区分开);`accounts.user_data`
   (jsonb,可空):账号数据同步时落库的 `/api/user/self` data 负载缓存(脱敏 DTO,
   失败时清空);`checkin_date`/`checkin_quota`(可空):今日签到记录缓存 (来自
   /api/user/checkin 的 stats.records,未签到时清空)。
@@ -455,7 +457,7 @@ Key 顺带拉模型,存量 Key 由 `api_key_model_sync` cron
 best-effort 调 `GET /api/user/checkin`,按 new-api 前端
 同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
 true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
-`failed`);上游明确回执「签到功能未启用」时改判 `unknown`、清空
+`failed`);上游明确回执「签到功能未启用」时改判 `disabled`、清空
 `checkin_date/checkin_quota`,并把 `checkin_enabled=false` 合并写回
 `sites.status_data`(`markSiteCheckinDisabled`)——所以账号「检测」本身就能让
 按钮从「需手动」变回「未开放」;其它 上游 success:false/字段缺失/请求失败时
@@ -463,7 +465,10 @@ true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_
 `checkin_disabled=true`)。已签到时 还会把今日记录 (records 中最大 checkin_date
 那条的 `checkin_date`/`quota_awarded`)写入
 `accounts.checkin_date/checkin_quota`,未签到时清空;`checkinAccount` 签到成功后
-同样 best-effort 回拉今日记录落库。账号列表额外透出 `site_checkin_enabled`(来自
+同样 best-effort 回拉今日记录落库,且**只有 `checked` 才写这两列**——其它结果
+(`manual_required`/`failed`/`disabled`)保留原值,避免一次浏览器失败把
+`syncAccountData` 刚拉到的今日记录清空(清空只由上面这条数据同步路径负责)。
+账号列表额外透出 `site_checkin_enabled`(来自
 `sites.status_data.checkin_enabled`,null=未知)供 前端签到按钮门禁。
 
 **站点健康检查判定**(`healthCheckSite`,cron 与手动端点共用):请求
