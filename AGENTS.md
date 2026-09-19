@@ -122,6 +122,7 @@ islands/         Preact islands(Dashboard/Upstream/Models/Logs/Settings/LoginCar
 components/      Layout、Modal、admin_api.ts(浏览器 API 客户端)、icons、brand_icons、use_url_state
 services/        业务逻辑(被 routes 调用),各自写 system_task_logs
   checkin_classifier.ts              直连签到结果/未开放签到/可信 Cloudflare challenge 分类 + 浏览器设置归一化
+  perf_metrics_service.ts            站点 /api/perf-metrics/summary 抓取/归一化/落库 + 行级 3 槽成功率投影
   browser_checkin_service.ts         CloakBrowser 个人中心自动签到与运行时状态
   browser_checkin_lease_service.ts   PostgreSQL 全局浏览器租约(跨 Deploy 实例串行)
 adapters/new_api_adapter.ts   对上游 new-api HTTP 的薄 fetch 封装
@@ -166,9 +167,9 @@ types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端
 - **api-keys**:
   `GET|POST /api/api-keys`;`GET|PATCH|DELETE /api/api-keys/:id`;`POST /api/api-keys/:id/sync-models`
 - **models**: `GET|POST /api/models`;`GET|PATCH|DELETE /api/models/:id`
-- **upstream-models**:
-  `GET /api/upstream-models`;`GET|PATCH /api/upstream-models/:id`(PATCH 接受
-  `modelId:null`
+- **upstream-models**: `GET /api/upstream-models`(带 `withPerf=1` 时每行附加
+  `perf`,见下「站点性能数据同步」;不带时响应与历史一致);
+  `GET|PATCH /api/upstream-models/:id`(PATCH 接受 `modelId:null`
   解除映射、`endpointType`);`POST /api/upstream-models/:id/test`;`POST /api/upstream-models/batch-link`
   与 `batch-unlink`(**两者都返回 501 notImplemented**)。**无 create POST、无
   DELETE**——上游模型由同步任务创建。
@@ -254,6 +255,9 @@ new-api 端点」, 不是 TunTunShu 自己暴露的路由。** 两种请求头�
   `GET /v1/models`、chatCompletions `POST /v1/chat/completions`。
 - getStatus `GET /api/status`(无鉴权头,带 Edge-like UA、redirect follow、可选
   AbortSignal)。站点健康检查与「自动获取站点名称」(fetchSystemName)共用此接口。
+- getPerfMetricsSummary `GET /api/perf-metrics/summary?hours=24`:站点健康检查时
+  顺带抓取(见下「站点性能数据同步」)。可选传入用户级鉴权(任意账号的
+  accessToken + userId),未传时只带 Edge-like UA 匿名请求。
 
 **new-api 约定**:token 无效时也回 HTTP 200,业务成败在 `body.success`。services
 一律用 `ok = response.ok && data.success === true` 判定。
@@ -367,10 +371,12 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   `create table if not exists`;另建 2 个唯一索引
   (`sites_origin_key`、`accounts(site_id,user_id)`),包在 try/catch
   里(有重复数据时告警并继续);
-  以及两处列回填:`alter table upstream_models add column if not exists endpoint_type ...`
-  与
+  以及三处列回填:`alter table upstream_models add column if not exists endpoint_type ...`、
   `alter table sites add column if not exists status_data jsonb`(健康检查时缓存的
-  new-api `/api/status` data 负载)。(“无 migration”成立,但有上述列回填。)
+  new-api `/api/status` data 负载)与
+  `alter table sites add column if not exists perf_metrics jsonb`(同一次健康检查
+  缓存的 `/api/perf-metrics/summary` 归一化结果,供上游模型行的迷你柱状图)。 (“无
+  migration”成立,但有上述列回填。)
 - **无任何 FK 约束**——所有 `*_id` 是裸 `bigint`。级联删除在应用代码里自顶向下做
   (deleteSite → accounts → api_keys → upstream_models)。**例外:deleteModel
   是「解除映射」 (置 `upstream_models.model_id=null`)而非删除上游模型。**
@@ -399,7 +405,11 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
 - `sites.status`: unknown | healthy |
   down;`sites.status_data`(jsonb,可空):最近一次 健康检查命中 new-api
   标志性字段时落库的 `/api/status` data 负载缓存, 判为 down
-  时清空(见下「站点健康检查判定」)。
+  时清空(见下「站点健康检查判定」);`sites.perf_metrics`(jsonb,可空):同一次
+  健康检查抓取并归一化的 `/api/perf-metrics/summary`(成功
+  `{ok:true,hours,fetched_at,window_start?,window_end?,models[]}`,失败
+  `{ok:false,hours,fetched_at,reason,http_status?/error?}`;失败整体覆盖写、不保留旧
+  数据),从不经 `/api/sites` 列表透出。
 - `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
   unknown | checked | unchecked | disabled | manual_required | failed(`disabled`
   表示上游权威回执确认站点未开放签到,与 `unknown` 的
@@ -483,6 +493,25 @@ down;`markSiteCheckinDisabled`(`site_service.ts`)则基于上游业务回执把
 `{ok,httpStatus,newApi,status}` 之外还带 `site`——检测后重读的整行 `sites` (含
 `status_data`、`last_health_check_log_id` 等),便于直接核对落库结果。
 
+**站点性能数据同步(迷你成功率柱)**:`healthCheckSite` 在同一次检测里**并行**请求
+`GET <origin>/api/perf-metrics/summary?hours=24`,归一化后与 `status_data` 一起
+写入 `sites.perf_metrics`。鉴权优先用该站点下任意一个账号(优先启用账号)的
+accessToken + userId;该站点无账号,或带账号拿到 401/403 时,再匿名重试一次
+(pricing 模块公开时匿名可读)。分类:`404/405`(旧版 new-api 没有该路由)→
+`unsupported`;`401/403` → `unauthorized`;其它非 2xx / 业务失败 / 非 JSON /
+传输异常 → `error`;成功 → `ok`。只保留白名单字段与有限数值(结构漂移不会写脏
+数据),整体覆盖写、失败不保留旧数据;抓取异常绝不抛给健康判定,日志 message 追加
+`perf=ok models=N` / `perf=<原因>(<http>)`。cron `site_health_check`(每小时)、
+手动「检测」、账号创建/签到前的补检测都会顺带刷新它,不新增 cron 与设置项。
+
+`GET /api/upstream-models?withPerf=1`(仅上游管理页传)把每行所属站点的
+`perf_metrics` 折叠成 `perf`:固定 3 槽的 `slots`(新版 `recent_success_series` 按
+`window_end` 对齐最近 3 个整点小时,无流量的小时为 null;旧版
+`recent_success_rates` 是无时间戳的「最近 ≤3 个有流量时段」,右对齐填最后几槽并标
+`legacy:true`)、`summary`(avg_latency_ms/success_rate/avg_tps)与 `state`
+(`ok`/`no_data`/`unsupported`/`unauthorized`/`error`/`pending`,`pending` = 站点
+从未同步)。不传该参数时响应与历史完全一致(不查该列、不带 `perf`)。
+
 `account_api_key_sync` 任务类型**无独立 cron**(jobs/ 中无对应 job):自动拉 Key
 已并入 账号数据同步 cron(`syncAccount`
 编排);`POST /api/tasks/account-api-key-sync` 仍可 手动对**所有**账号(无 enabled
@@ -553,8 +582,13 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   选区兜底),复制的是列表接口原样返回的**完整明文 Key**(密文仅前端 `maskKey`
   展示),成功后按钮短暂显示对勾并走 flash 提示。 模型叶子:端点类型下拉(PATCH
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
-  与「＋新增统一模型」→ POST
-  /models)、测试按钮。模型列表排序:启用优先,组内名称不区分大小写
+  与「＋新增统一模型」→ POST /models)、测试入口。测试入口是 daisyUI 横向 icon
+  menu (`menu menu-horizontal menu-xs`,对话/图像/工具三个图标,文案走
+  `tooltip data-tip`),其左侧(`RowActions` 的 `left` 槽)是最近 3 时段成功率迷你柱
+  (`PerfBadge.tsx` + `perf.ts`):≥90% 绿、≥70% 黄、其余红、无数据灰;悬浮 tooltip
+  给出近 24 小时成功率/延迟/吞吐,站点不支持 / 未开放 / 抓取失败 / 无该模型数据 /
+  待同步时各自给出对应文案(旧版数据额外标注「柱为最近有流量的时段」)。
+  模型列表排序:启用优先,组内名称不区分大小写
   a→z。probe-name「自动获取」自动填站点/账号名。上游页所有带悬浮提示的按钮(行操作签到/复制密钥/协议图标/工具栏脚本安装等)统一用
   daisyUI `tooltip` 组件(`data-tip`,非原生 title);站点变更(检测/启停/新建编辑)
   走 `siteOnly`
@@ -677,6 +711,13 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   开放签到时 skipped(不触发浏览器)与批任务 success/failed/skipped 分类。
 - `services/settings_service_test.ts`:覆盖浏览器开关与 30–120s timeout 在 DB
   读写边界的规范化规则。
+- `services/perf_metrics_service_test.ts`:覆盖 `/api/perf-metrics/summary` 的
+  HTTP 状态分类(404/405→unsupported、401/403→unauthorized、5xx/业务失败/非
+  JSON/传输异常→error)、新旧两种负载的归一化与脏数据丢弃、3 槽对齐(按
+  `window_end` 落槽、缺小时为 null、缺 window 时回退末点、旧格式右对齐补 null),
+  以及 `buildRowPerf` 的 ok/no_data/unsupported/unauthorized/pending 投影。
+- `components/upstream/perf_test.ts`:覆盖迷你柱配色阈值、延迟/吞吐格式化与各状态
+  的 tooltip 文案。
 - `lib/browser_checkin_security_test.ts`:覆盖纯公网 HTTP(S) origin 门禁与常见
   IPv4/IPv6 私网、NAT64/6to4、文档/保留地址拒绝。
 - `lib/cloakbrowser_license_test.ts`:覆盖 key 从 dotenv

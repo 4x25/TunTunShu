@@ -1,6 +1,11 @@
 import { NewApiAdapter } from "../adapters/new_api_adapter.ts";
 import { getSql } from "../db/client.ts";
 import { type PageParams, pageResult } from "../lib/pagination.ts";
+import {
+  fetchSitePerfMetrics,
+  PERF_HOURS,
+  type SitePerfFetchResult,
+} from "./perf_metrics_service.ts";
 import { createSystemTaskLog } from "./system_task_log_service.ts";
 
 const adapter = new NewApiAdapter();
@@ -164,12 +169,18 @@ export async function listSites(params: PageParams) {
     values,
   );
   const pageValues = [...values, params.pageSize, params.offset];
-  const items = await sql.unsafe(
+  const rows = await sql.unsafe<Record<string, unknown>[]>(
     `select distinct sites.* ${fromSql} ${whereSql}
      order by sites.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
     pageValues,
   );
+  // perf_metrics 只服务上游模型行的迷你柱状图,列表接口不回传(避免站点列表与
+  // ModelsApp 的全量分页拉取被大段 JSON 撑大)。
+  const items = rows.map((row) => {
+    const { perf_metrics: _perfMetrics, ...rest } = row;
+    return rest;
+  });
   return pageResult(items, params, Number(countRows[0]?.count ?? 0));
 }
 
@@ -199,14 +210,19 @@ export async function updateSite(
   return { id, name, origin, enabled, remark };
 }
 
+/** 健康检查日志里的性能数据摘要(ok 带模型数,失败带原因/HTTP 码)。 */
+function perfLogText(perf: SitePerfFetchResult): string {
+  if (perf.state === "ok") {
+    return `perf=ok models=${perf.cache.models?.length ?? 0}`;
+  }
+  return `perf=${perf.state}${
+    perf.httpStatus === undefined ? "" : `(${perf.httpStatus})`
+  }`;
+}
+
 /**
- * 站点健康检查:GET <origin>/api/status(与「自动获取站点名称」同一接口)。
- * 判定healthy 不只看 HTTP 200,还要求 new-api 约定的 `{success:true, data:{...}}`
- * 包裹并通过标志性字段识别(见 isNewApiStatusData);命中时把整个 data
- * 负载落库到 sites.status_data 作为缓存,供后续流程使用,失败时清空。
- */
-/**
- * 重读整行站点数据(含 status_data),供检测接口把「检测后」的真实落库状态返回。
+ * 重读整行站点数据(含 status_data / perf_metrics),供检测接口把「检测后」的真实
+ * 落库状态返回。
  */
 async function readSiteRow(id: number) {
   const rows = await getSql()<Record<string, unknown>[]>`
@@ -215,6 +231,15 @@ async function readSiteRow(id: number) {
   return rows[0] ?? null;
 }
 
+/**
+ * 站点健康检查(cron 每小时、手动检测、账号创建/签到前的补检测共用)。
+ * - `GET <origin>/api/status`:判定 healthy 不只看 HTTP 200,还要求 new-api 约定的
+ *   `{success:true, data:{...}}` 包裹并通过标志性字段识别(见 isNewApiStatusData);
+ *   命中时把整个 data 负载落库到 sites.status_data 作为缓存,失败时清空。
+ * - `GET <origin>/api/perf-metrics/summary?hours=24`:同一次检测里并行抓取,归一化
+ *   后落库 sites.perf_metrics(供上游模型行的迷你柱状图)。旧版 new-api 没有该路由
+ *   (404/405)或要求登录(401/403)时记下原因,不影响健康判定。
+ */
 export async function healthCheckSite(id: number) {
   const sql = getSql();
   const rows = await sql<{ id: number; origin: string }[]>`
@@ -222,6 +247,20 @@ export async function healthCheckSite(id: number) {
   `;
   const site = rows[0];
   if (!site) return null;
+  // 性能数据与健康检查共用同一次检测:并行发出,perf 侧自身吞掉所有异常,
+  // 绝不影响 /api/status 的判定。
+  const perfPromise: Promise<SitePerfFetchResult> = fetchSitePerfMetrics(
+    id,
+    site.origin,
+  ).catch(() => ({
+    state: "error" as const,
+    cache: {
+      ok: false,
+      hours: PERF_HOURS,
+      fetched_at: new Date().toISOString(),
+      reason: "error" as const,
+    },
+  }));
   try {
     const response = await adapter.getStatus(
       site.origin,
@@ -234,11 +273,14 @@ export async function healthCheckSite(id: number) {
     const isHealthy = response.ok && body?.success === true &&
       isNewApiStatusData(data);
     const status = isHealthy ? "healthy" : "down";
+    const perf = await perfPromise;
     const logId = await createSystemTaskLog({
       taskType: "site_health_check",
       status: isHealthy ? "success" : "failed",
       siteId: id,
-      message: `http_status=${response.status} new_api=${isHealthy}`,
+      message: `http_status=${response.status} new_api=${isHealthy} ${
+        perfLogText(perf)
+      }`,
     });
     // 用 ::text::jsonb 而不是 ::jsonb:后者会让 Postgres 把参数类型推断为 jsonb,
     // postgres 驱动随即对参数再 JSON.stringify 一次(serializers[3802]),把 JSON
@@ -249,6 +291,7 @@ export async function healthCheckSite(id: number) {
       update sites
       set status = ${status},
           status_data = ${isHealthy ? JSON.stringify(data) : null}::text::jsonb,
+          perf_metrics = ${JSON.stringify(perf.cache)}::text::jsonb,
           last_health_check_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
@@ -257,27 +300,33 @@ export async function healthCheckSite(id: number) {
       httpStatus: response.status,
       newApi: isHealthy,
       status,
+      perfStatus: perf.state,
       // 检测接口把整行站点(含 status_data / last_health_check_log_id 等)
       // 原样回传,便于排查。
       site: await readSiteRow(id),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const perf = await perfPromise;
     const logId = await createSystemTaskLog({
       taskType: "site_health_check",
       status: "failed",
       siteId: id,
-      message,
+      message: `${message} ${perfLogText(perf)}`,
     });
     await sql`
       update sites
-      set status = 'down', status_data = null, last_health_check_log_id = ${logId}, updated_at = now()
+      set status = 'down',
+          status_data = null,
+          perf_metrics = ${JSON.stringify(perf.cache)}::text::jsonb,
+          last_health_check_log_id = ${logId}, updated_at = now()
       where id = ${id}
     `;
     return {
       ok: false,
       error: message,
       status: "down",
+      perfStatus: perf.state,
       site: await readSiteRow(id),
     };
   }

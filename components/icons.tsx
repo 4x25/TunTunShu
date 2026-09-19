@@ -175,6 +175,33 @@ export function IconLogList(props: IconProps) {
   );
 }
 
+/* 上游模型行的测试入口(横向 icon menu) */
+export function IconChat(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" {...STROKE} class={props.class}>
+      <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.2A8 8 0 1 1 21 12z" />
+    </svg>
+  );
+}
+
+export function IconImage(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" {...STROKE} class={props.class}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="M4 18l5-5 4 4 2.5-2.5L20 18" />
+    </svg>
+  );
+}
+
+export function IconTool(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" {...STROKE} class={props.class}>
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </svg>
+  );
+}
+
 export function IconGear(props: IconProps) {
   return (
     <svg viewBox="0 0 24 24" {...STROKE} class={props.class}>

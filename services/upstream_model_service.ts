@@ -1,8 +1,20 @@
 import { getSql } from "../db/client.ts";
 import { type PageParams, pageResult } from "../lib/pagination.ts";
 import { type EndpointType, endpointTypes } from "../types/enums.ts";
+import {
+  buildRowPerf,
+  type RowPerf,
+  type SitePerfCache,
+} from "./perf_metrics_service.ts";
 
-export async function listUpstreamModels(params: PageParams) {
+/**
+ * @param withPerf 为 true 时附带每行的 `perf`(站点 perf_metrics 快照折叠出的
+ *   迷你柱状图数据)。只有上游管理页需要;ModelsApp 的全量拉取不带,省流量。
+ */
+export async function listUpstreamModels(
+  params: PageParams,
+  options: { withPerf?: boolean } = {},
+) {
   const sql = getSql();
   const values: Array<number | string> = [];
   const where: string[] = [];
@@ -55,13 +67,47 @@ export async function listUpstreamModels(params: PageParams) {
     values,
   );
   const pageValues = [...values, params.pageSize, params.offset];
-  const items = await sql.unsafe(
-    `select upstream_models.* ${fromSql} ${whereSql}
+  const items = await sql.unsafe<Record<string, unknown>[]>(
+    `select upstream_models.*, sites.id as site_id ${fromSql} ${whereSql}
      order by upstream_models.enabled desc, lower(upstream_models.name) asc, upstream_models.id desc
      limit $${values.length + 1} offset $${values.length + 2}`,
     pageValues,
   );
-  return pageResult(items, params, Number(countRows[0]?.count ?? 0));
+  if (!options.withPerf) {
+    const plain = items.map((row) => {
+      const { site_id: _siteId, ...rest } = row;
+      return rest;
+    });
+    return pageResult(plain, params, Number(countRows[0]?.count ?? 0));
+  }
+  // 每行的 perf 来自所属站点的 perf_metrics 快照;同一页里站点会重复出现,按站点
+  // 去重只取一次(jsonb 负载可能不小,不在行里重复传输/解析)。
+  const siteIds = [...new Set(items.map((row) => Number(row.site_id)))];
+  const perfCaches = new Map<number, SitePerfCache | null>();
+  if (siteIds.length) {
+    const cacheRows = await sql<{ id: number; perf_metrics: unknown }[]>`
+      select id, perf_metrics from sites where id in ${sql(siteIds)}
+    `;
+    for (const row of cacheRows) {
+      // postgres 驱动把 bigint 以字符串返回(全仓 *_id 都是这个约定),这里统一
+      // 归一化成 number 再做键,避免与行里的 Number(site_id) 对不上。
+      perfCaches.set(
+        Number(row.id),
+        (row.perf_metrics ?? null) as SitePerfCache | null,
+      );
+    }
+  }
+  const rows = items.map((row) => {
+    const { site_id: siteId, ...rest } = row;
+    return {
+      ...rest,
+      perf: buildRowPerf(
+        perfCaches.get(Number(siteId)) ?? null,
+        String(row.name),
+      ) satisfies RowPerf,
+    };
+  });
+  return pageResult(rows, params, Number(countRows[0]?.count ?? 0));
 }
 
 export async function updateUpstreamModel(

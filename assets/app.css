@@ -1900,6 +1900,61 @@ a.btn {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/* 上游模型行左侧的最近 3 时段成功率迷你柱;tooltip 沿用 daisyUI data-tip。
+   无数据/不支持/失败时渲染灰柱占位,保证同一列各行宽度一致。 */
+.perf-chart {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  flex: none;
+}
+.perf-bar {
+  width: 4px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+.perf-bar-ok {
+  background: var(--ok);
+}
+.perf-bar-warn {
+  background: var(--warn);
+}
+.perf-bar-bad {
+  background: var(--bad);
+}
+.perf-bar-empty {
+  background: var(--border-strong);
+}
+/* 测试入口:横向 icon menu,只放图标,文案在 tooltip 里 */
+.perf-test-menu {
+  flex-wrap: nowrap;
+  padding: 0;
+  gap: 2px;
+}
+.perf-test-menu > li > button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--r);
+  color: var(--muted);
+}
+.perf-test-menu > li > button:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--fg-soft);
+}
+.perf-test-menu > li > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.perf-test-menu svg {
+  width: 15px;
+  height: 15px;
+}
+
 /* 协议(端点)选择:置于标题区模型名前,选择框仅一个品牌图标(紧凑、无小三角) */
 .ep-dd {
   flex: none;

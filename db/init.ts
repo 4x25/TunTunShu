@@ -157,9 +157,12 @@ export async function initializeDatabase() {
     add column if not exists endpoint_type text not null default 'openai_chat'
   `;
   // status_data 为后加列:缓存站点健康检查时拉到的 new-api /api/status data 响应体。
+  // perf_metrics 同为后加列:缓存同一次健康检查里拉到的 /api/perf-metrics/summary
+  // 归一化结果(供上游模型行的迷你成功率柱状图)。
   await sql`
     alter table sites
-    add column if not exists status_data jsonb
+    add column if not exists status_data jsonb,
+    add column if not exists perf_metrics jsonb
   `;
   // user_data 为后加列:缓存账号数据同步时拉到的 new-api /api/user/self data 响应体。
   await sql`

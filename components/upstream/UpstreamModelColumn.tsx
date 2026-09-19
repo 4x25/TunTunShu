@@ -1,10 +1,18 @@
 import { EndpointIcon } from "../brand_icons.tsx";
 import classNames from "classnames";
-import { IconSearch } from "../icons.tsx";
+import { IconChat, IconImage, IconSearch, IconTool } from "../icons.tsx";
 import { ENDPOINT_LABELS, ENDPOINT_OPTIONS, TEST_KINDS } from "./constants.ts";
 import { handleColumnScroll } from "./list_state.ts";
-import { ActBtn, MillerRow, RowActions, RowHead } from "./row_primitives.tsx";
+import { PerfBadge } from "./PerfBadge.tsx";
+import { MillerRow, RowActions, RowHead } from "./row_primitives.tsx";
 import type { ListPage, Model, TestKind, UpstreamModel } from "./types.ts";
+
+/** 三种测试入口的图标(横向 icon menu;文案放 tooltip)。 */
+const TEST_ICONS: Record<TestKind, typeof IconChat> = {
+  chat: IconChat,
+  vision: IconImage,
+  tool: IconTool,
+};
 
 export function UpstreamModelColumn(
   {
@@ -204,16 +212,26 @@ export function UpstreamModelColumn(
                     </div>
                   </div>
                 </div>
-                <RowActions>
-                  {TEST_KINDS.map((t) => (
-                    <ActBtn
-                      key={t.kind}
-                      disabled={busy === "ep" + m.id}
-                      onClick={() => onRunTest(m, t.kind)}
-                    >
-                      {t.label}
-                    </ActBtn>
-                  ))}
+                <RowActions left={<PerfBadge perf={m.perf} />}>
+                  <ul class="menu menu-horizontal menu-xs perf-test-menu">
+                    {TEST_KINDS.map((t) => {
+                      const Icon = TEST_ICONS[t.kind];
+                      return (
+                        <li key={t.kind}>
+                          <button
+                            type="button"
+                            class="tooltip tooltip-bottom tooltip-end"
+                            data-tip={t.label}
+                            aria-label={t.label}
+                            disabled={busy === "ep" + m.id}
+                            onClick={() => onRunTest(m, t.kind)}
+                          >
+                            <Icon />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </RowActions>
               </MillerRow>
             );

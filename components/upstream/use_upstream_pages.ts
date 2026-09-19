@@ -331,6 +331,8 @@ export function useUpstreamPages(
         siteId: sel.site,
         accountId: sel.account,
         apiKeyId: sel.key,
+        // 只有上游管理页需要每行的性能迷你柱(站点 perf_metrics 快照派生)。
+        withPerf: 1,
       },
     });
   }

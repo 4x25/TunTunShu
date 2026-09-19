@@ -97,6 +97,29 @@ export class NewApiAdapter {
     });
   }
 
+  /**
+   * 模型广场的迷你性能柱数据:GET /api/perf-metrics/summary。
+   * 新版 new-api 公开可用(pricing 模块公开时匿名即可),旧版没有该路由会回 404;
+   * 需要登录的站点用任意账号的 accessToken + userId 走用户级请求头。
+   */
+  async getPerfMetricsSummary(
+    origin: string,
+    hours = 24,
+    auth?: NewApiUserAuth,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    return await fetch(
+      `${origin.replace(/\/+$/, "")}/api/perf-metrics/summary?hours=${hours}`,
+      {
+        headers: auth
+          ? this.userHeaders(auth)
+          : { "User-Agent": NEW_API_USER_AGENT },
+        signal,
+        redirect: "follow",
+      },
+    );
+  }
+
   async chatCompletions(
     auth: NewApiKeyAuth,
     body: unknown,

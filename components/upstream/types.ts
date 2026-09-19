@@ -1,3 +1,5 @@
+import type { UpstreamPerf } from "./perf.ts";
+
 export interface Site {
   id: string;
   name: string;
@@ -41,6 +43,8 @@ export interface UpstreamModel {
   enabled: boolean;
   status: string;
   endpoint_type: string;
+  /** 上游管理页(listUpstreamModels withPerf=1)才透出的最近 3 时段成功率。 */
+  perf?: UpstreamPerf;
 }
 
 export interface Model {

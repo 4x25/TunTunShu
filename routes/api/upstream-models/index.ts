@@ -9,6 +9,8 @@ export const handler = define.handlers({
     const unauthorized = requireAdmin(ctx.req);
     if (unauthorized) return unauthorized;
     try {
+      const withPerf =
+        new URL(ctx.req.url).searchParams.get("withPerf") === "1";
       return json(
         await listUpstreamModels(
           parsePageParams(
@@ -16,6 +18,7 @@ export const handler = define.handlers({
             ["siteId", "accountId", "apiKeyId"],
             "modelQ",
           ),
+          { withPerf },
         ),
       );
     } catch (error) {
