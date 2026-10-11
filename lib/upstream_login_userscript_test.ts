@@ -335,6 +335,20 @@ function createHarness(options: HarnessOptions = {}): Harness {
         body: options.passkeyWriteBody ?? { success: false, message: "未登录" },
       };
     }
+    // 模拟新版 new-api:访问令牌管理要求浏览器 Session,PAT 请求返回 403。
+    if (
+      url.pathname === "/api/user/access_tokens" ||
+      url.pathname.startsWith("/api/user/access_tokens/")
+    ) {
+      return {
+        status: 403,
+        body: {
+          success: false,
+          code: "AUTH_SESSION_REQUIRED",
+          message: "a dashboard login session is required",
+        },
+      };
+    }
     // 模拟新版 new-api:会话管理要求浏览器 Session,PAT 请求返回 403。
     if (url.pathname === "/api/user/sessions") {
       return {
@@ -627,7 +641,7 @@ Deno.test("upstream login runtime 普通页面保持惰性", async () => {
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "2.0.2",
+    "2.1.0",
     "script marker mismatch",
   );
   assert(harness.sandbox.fetch === originalFetch, "inert page patched fetch");
@@ -1192,6 +1206,95 @@ Deno.test("upstream login userscript XHR 兜底 Passkey/会话端点的 401/403"
   );
 });
 
+Deno.test("upstream login userscript 兜底访问令牌管理端点的会话要求", async () => {
+  const harness = createHarness({ storedSession: activeSession() });
+  harness.execute();
+  await settle();
+  const patchedFetch = harness.sandbox.fetch as typeof fetch;
+
+  // 列表端点:403 AUTH_SESSION_REQUIRED → 合成为空列表,避免安全页误判登录失效。
+  const listResponse = await patchedFetch("/api/user/access_tokens", {
+    method: "GET",
+  });
+  assertEquals(listResponse.status, 200, "access token list was not rescued");
+  const listBody = await listResponse.json() as {
+    success: boolean;
+    data: { items: unknown[]; legacy: unknown };
+  };
+  assertEquals(listBody.success, true, "list body was not success");
+  assertEquals(listBody.data.items.length, 0, "list was not empty");
+  assertEquals(listBody.data.legacy, null, "legacy entry must be null");
+  assertEquals(
+    harness.fetchCalls.at(-1)?.headers.authorization,
+    `Bearer ${PAT}`,
+    "list request lacked PAT",
+  );
+
+  // 子路径(catalog/scopes)形状不同,不做兜底:保持上游 403,让页面优雅降级。
+  const catalogResponse = await patchedFetch(
+    "/api/user/access_tokens/catalog",
+    {
+      method: "GET",
+    },
+  );
+  assertEquals(
+    catalogResponse.status,
+    403,
+    "catalog must not be rescued with a list-shaped body",
+  );
+
+  // 写操作:降级为 HTTP 200 业务失败,附带明确说明。
+  const createResponse = await patchedFetch("/api/user/access_tokens", {
+    method: "POST",
+  });
+  assertEquals(createResponse.status, 200, "create was not downgraded");
+  const createBody = await createResponse.json() as {
+    success: boolean;
+    message: string;
+  };
+  assertEquals(createBody.success, false, "create must fail business-wise");
+  assert(
+    createBody.message.includes("访问令牌"),
+    "create message must mention access tokens",
+  );
+
+  // 免登状态不受影响。
+  await patchedFetch("/api/items");
+  assertEquals(
+    harness.fetchCalls.at(-1)?.headers.authorization,
+    `Bearer ${PAT}`,
+    "login state was cleared after access token endpoints",
+  );
+});
+
+Deno.test("upstream login userscript XHR 兜底访问令牌管理端点的会话要求", async () => {
+  const harness = createHarness({ storedSession: activeSession() });
+  harness.execute();
+  await settle();
+
+  const listXhr = harness.createXhr();
+  listXhr.open("GET", "/api/user/access_tokens");
+  await sendXhr(listXhr);
+  assertEquals(listXhr.status, 200, "XHR list was not rescued");
+  const listBody = JSON.parse(listXhr.responseText) as {
+    success: boolean;
+    data: { items: unknown[]; legacy: unknown };
+  };
+  assertEquals(listBody.success, true, "XHR list body was not success");
+  assertEquals(listBody.data.items.length, 0, "XHR list was not empty");
+  assertEquals(listBody.data.legacy, null, "XHR legacy entry must be null");
+
+  const createXhr = harness.createXhr();
+  createXhr.open("POST", "/api/user/access_tokens");
+  await sendXhr(createXhr);
+  assertEquals(createXhr.status, 200, "XHR create was not downgraded");
+  const createBody = JSON.parse(createXhr.responseText) as {
+    success: boolean;
+    message: string;
+  };
+  assertEquals(createBody.success, false, "XHR create must fail business-wise");
+});
+
 Deno.test("upstream login userscript 透传 Passkey 成功响应并把写操作降级为业务失败", async () => {
   const harness = createHarness({
     storedSession: activeSession(),
@@ -1430,7 +1533,7 @@ Deno.test("upstream automation bootstrap keeps PAT out of URL and Storage", asyn
 
   assertEquals(
     harness.sandbox.__TTS_UPSTREAM_LOGIN_SCRIPT__,
-    "2.0.2",
+    "2.1.0",
     "automation runtime marker mismatch",
   );
   for (

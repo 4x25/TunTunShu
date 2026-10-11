@@ -21,7 +21,7 @@
 import { buildUpstreamLoginRuntimeSource } from "./upstream_login_userscript.ts";
 
 /** 合并后的「囤囤鼠脚本」版本(同时作为免登 marker 版本)。 */
-export const TUNTUNSHU_SCRIPT_VERSION = "2.0.2";
+export const TUNTUNSHU_SCRIPT_VERSION = "2.1.0";
 
 export function buildUserScript(
   opts: { baseUrl: string; authKey: string },
@@ -56,6 +56,28 @@ export function buildUserScript(
   "use strict";
   var TTS_BASE = ${baseLit};
   var TTS_KEY = ${keyLit};
+
+  // ── 新版 new-api 的 scoped access token 参数 ────────────────────────
+  // 权限为完整个人域(不含 account_security:write);过期时间 0 = 永不过期,
+  // 与旧版单 PAT 的行为对齐;固定名称便于用户在上游「安全」页辨认。
+  var PAT_NAME = "囤囤鼠";
+  var PAT_SCOPES = [
+    "profile:read",
+    "profile:write",
+    "api_key:read",
+    "api_key:write",
+    "api_key:reveal",
+    "wallet:read",
+    "wallet:write",
+    "usage:read",
+    "account_security:read",
+  ];
+  var PAT_EXPIRES_AT = 0;
+  var ACCESS_TOKEN_SCOPE = "access_token.generate";
+  var PASSWORD_SET_SCOPE = "account.password.set";
+  // OAuth 弹窗的等待上限与轮询间隔(同时承担「用户关窗」检测)。
+  var OAUTH_POPUP_DEADLINE_MS = 10 * 60 * 1000;
+  var OAUTH_POPUP_POLL_MS = 500;
 
   // ── 小胶囊按钮:免登与快捷录入唯一的页面入口 ─────────────────────
   // 状态机: hidden(未识别 new-api) / idle(快捷录入) / busy(进行中)
@@ -340,6 +362,192 @@ export function buildUserScript(
     };
   })();
 
+  // ── 安全验证弹窗:密码 / 2FA 动态码 / 设置密码 / 手动粘贴 ──────────
+  // opts.action(values) 返回 Promise:
+  //   {done:true, value} → 关闭弹窗并 resolve(value);
+  //   {error}            → 展示错误并保留弹窗(允许重试);
+  //   抛出的异常同样按错误展示。取消/关闭 → resolve(null)。
+  function ttsDialog(opts) {
+    return new Promise(function (resolve) {
+      if (!document.body) {
+        resolve(null);
+        return;
+      }
+      var overlay = document.createElement("div");
+      overlay.id = "tts-dialog";
+      overlay.style.cssText =
+        "position:fixed;inset:0;left:0;top:0;right:0;bottom:0;" +
+        "z-index:2147483647;background:rgba(15,23,42,.55);" +
+        "display:flex;align-items:center;justify-content:center;padding:16px;";
+      var box = document.createElement("div");
+      box.style.cssText =
+        "width:100%;max-width:400px;max-height:86vh;overflow:auto;background:#fff;" +
+        "color:#0f172a;border-radius:12px;padding:18px;" +
+        "box-shadow:0 20px 50px rgba(0,0,0,.35);" +
+        "font:13px/1.6 system-ui,-apple-system,sans-serif;text-align:left;";
+      var title = document.createElement("div");
+      title.textContent = opts.title || "安全验证";
+      title.style.cssText = "font-size:15px;font-weight:700;margin-bottom:6px;";
+      box.appendChild(title);
+      if (opts.desc) {
+        var desc = document.createElement("div");
+        desc.textContent = String(opts.desc);
+        desc.style.cssText =
+          "color:#334155;margin-bottom:10px;white-space:pre-line;";
+        box.appendChild(desc);
+      }
+      if (opts.link && opts.link.href) {
+        var link = document.createElement("a");
+        link.href = String(opts.link.href);
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = opts.link.label ? String(opts.link.label) : "打开链接";
+        link.style.cssText =
+          "display:inline-block;color:#0a83c4;margin-bottom:10px;";
+        box.appendChild(link);
+      }
+      var select = null;
+      if (opts.select && opts.select.options && opts.select.options.length > 1) {
+        var selectLabel = document.createElement("div");
+        selectLabel.textContent = opts.select.label
+          ? String(opts.select.label)
+          : "选择授权方式";
+        selectLabel.style.cssText = "margin:6px 0 4px;color:#334155;";
+        box.appendChild(selectLabel);
+        select = document.createElement("select");
+        select.id = "tts-dialog-select";
+        select.style.cssText =
+          "width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;" +
+          "border-radius:8px;background:#fff;color:#0f172a;font:inherit;";
+        for (var i = 0; i < opts.select.options.length; i++) {
+          var option = document.createElement("option");
+          option.value = String(opts.select.options[i].value);
+          option.textContent = String(
+            opts.select.options[i].label || opts.select.options[i].value,
+          );
+          select.appendChild(option);
+        }
+        box.appendChild(select);
+      }
+      var input = null;
+      if (opts.input) {
+        var inputLabel = document.createElement("div");
+        inputLabel.textContent = opts.input.label ? String(opts.input.label) : "";
+        inputLabel.style.cssText = "margin:6px 0 4px;color:#334155;";
+        box.appendChild(inputLabel);
+        input = document.createElement("input");
+        input.id = "tts-dialog-input";
+        input.type = opts.input.type === "password" ? "password" : "text";
+        input.value = opts.input.value != null ? String(opts.input.value) : "";
+        if (opts.input.placeholder) {
+          input.placeholder = String(opts.input.placeholder);
+        }
+        input.autocomplete = "off";
+        input.style.cssText =
+          "width:100%;box-sizing:border-box;padding:9px 10px;" +
+          "border:1px solid #cbd5e1;border-radius:8px;background:#fff;" +
+          "color:#0f172a;font:inherit;outline:none;";
+        box.appendChild(input);
+      }
+      if (opts.note) {
+        var note = document.createElement("div");
+        note.textContent = String(opts.note);
+        note.style.cssText =
+          "margin-top:8px;color:#64748b;font-size:12px;white-space:pre-line;";
+        box.appendChild(note);
+      }
+      var error = document.createElement("div");
+      error.id = "tts-dialog-error";
+      error.textContent = opts.error ? String(opts.error) : "";
+      error.style.cssText =
+        "margin-top:8px;color:#dc2626;font-size:12px;min-height:0;";
+      box.appendChild(error);
+      var actions = document.createElement("div");
+      actions.style.cssText =
+        "display:flex;gap:8px;justify-content:flex-end;margin-top:12px;";
+      var cancel = document.createElement("button");
+      cancel.id = "tts-dialog-cancel";
+      cancel.type = "button";
+      cancel.textContent = "取消";
+      cancel.style.cssText =
+        "padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;" +
+        "background:#fff;color:#334155;cursor:pointer;" +
+        "font:600 13px/1 system-ui,-apple-system,sans-serif;";
+      var submit = document.createElement("button");
+      submit.id = "tts-dialog-submit";
+      submit.type = "button";
+      submit.textContent = opts.submitText ? String(opts.submitText) : "确定";
+      submit.style.cssText =
+        "padding:8px 14px;border:none;border-radius:8px;background:#0a83c4;" +
+        "color:#fff;cursor:pointer;font:600 13px/1 system-ui,-apple-system,sans-serif;";
+      actions.appendChild(cancel);
+      actions.appendChild(submit);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      var busy = false;
+      var settled = false;
+      function close(value) {
+        if (settled) return;
+        settled = true;
+        try { overlay.remove(); } catch (_) {
+          if (overlay.parentNode && overlay.parentNode.removeChild) {
+            overlay.parentNode.removeChild(overlay);
+          }
+        }
+        resolve(value);
+      }
+      function setBusy(next) {
+        busy = next;
+        cancel.disabled = next;
+        submit.disabled = next;
+        submit.textContent = next
+          ? "处理中…"
+          : (opts.submitText ? String(opts.submitText) : "确定");
+      }
+      function submitValues() {
+        if (busy || settled) return;
+        error.textContent = "";
+        var values = {
+          input: input ? String(input.value) : "",
+          select: select ? String(select.value) : "",
+        };
+        setBusy(true);
+        Promise.resolve().then(function () {
+          return opts.action ? opts.action(values) : { done: true, value: values.input };
+        }).then(function (result) {
+          if (settled) return;
+          if (result && result.done) {
+            close(result.value != null ? result.value : values.input);
+            return;
+          }
+          setBusy(false);
+          if (result && result.error) {
+            error.textContent = String(result.error);
+            return;
+          }
+          close(values.input);
+        }, function (cause) {
+          if (settled) return;
+          setBusy(false);
+          error.textContent = (cause && cause.message)
+            ? String(cause.message)
+            : "操作失败,请重试";
+        });
+      }
+      cancel.addEventListener("click", function () {
+        if (!busy) close(null);
+      });
+      submit.addEventListener("click", submitValues);
+      if (input) {
+        input.addEventListener("keydown", function (event) {
+          if (event && event.key === "Enter") submitValues();
+        });
+      }
+    });
+  }
+
 ${buildUpstreamLoginRuntimeSource()}
 
   function toast(msg, ok) {
@@ -425,7 +633,6 @@ ${buildUpstreamLoginRuntimeSource()}
       .catch(function () { return false; });
   }
 
-  var recorded = false;
   var quickBusy = false;
 
   function expectTtsPage(r, what) {
@@ -467,12 +674,11 @@ ${buildUpstreamLoginRuntimeSource()}
     });
   }
 
-  // 已录入判定:站点(origin) 与账号(site_id+user_id) 都存在则 recorded。
-  // 返回 Promise<boolean>,点击流程会等待结果后再决定是否弹出覆盖确认。
-  function refreshRecorded(auth) {
+  // 已录入判定:站点(origin) 与账号(site_id+user_id) 都存在则返回账号行(含
+  // access_token,用于复用);否则返回 null。点击流程会等待结果后再决定覆盖确认。
+  function findRecordedAccount(auth) {
     if (!auth || !auth.userId) {
-      recorded = false;
-      return Promise.resolve(false);
+      return Promise.resolve(null);
     }
     var origin = normOrigin(location.origin);
     return findTtsItem(
@@ -484,7 +690,7 @@ ${buildUpstreamLoginRuntimeSource()}
       },
       1,
     ).then(function (site) {
-      if (!site) return false;
+      if (!site) return null;
       return findTtsItem(
         "/api/accounts",
         { siteId: site.id, accountQ: auth.userId },
@@ -494,16 +700,17 @@ ${buildUpstreamLoginRuntimeSource()}
             String(a.user_id) === String(auth.userId);
         },
         1,
-      ).then(function (account) { return !!account; });
-    }).then(function (found) {
-      recorded = !!found;
-      return recorded;
+      );
+    }).then(function (account) {
+      return account || null;
     });
   }
 
   // 同源调 new-api。旧模式只带 session cookie + New-Api-User;新版模式额外带
-  // 短期 Dashboard Bearer token。返回 HTTP 状态与解析后的 JSON,供鉴权分支判断。
-  function napiRequest(method, path, auth, body) {
+  // 短期 Dashboard Bearer token(TTL 15 分钟,OAuth 授权等长流程可能过期,收到
+  // 401 时自动刷新一次再重试)。extraHeaders 用于 X-Security-Proof 等。
+  // 返回 HTTP 状态与解析后的 JSON,供鉴权分支判断。
+  function napiRequest(method, path, auth, body, extraHeaders, skipRefreshRetry) {
     var headers = {
       "Cache-Control": "no-store",
       "New-Api-User": String(auth.userId),
@@ -512,12 +719,35 @@ ${buildUpstreamLoginRuntimeSource()}
       headers.Authorization = "Bearer " + auth.dashboardToken;
     }
     if (body) headers["Content-Type"] = "application/json";
+    if (extraHeaders) {
+      Object.keys(extraHeaders).forEach(function (key) {
+        headers[key] = extraHeaders[key];
+      });
+    }
     return fetch(path, {
       method: method,
       credentials: "include",
       headers: headers,
       body: body ? JSON.stringify(body) : undefined,
     }).then(function (r) {
+      if (r.status === 401 && !skipRefreshRetry && auth.dashboardToken) {
+        return refreshModernAuth().then(function (fresh) {
+          if (String(fresh.userId) !== String(auth.userId)) {
+            // 浏览器里的 refresh cookie 可能已切换到另一个账号(同站多标签登录),
+            // 身份不一致时立即中止,避免以错误账号执行后续请求。
+            throw taggedError("登录账号已变化,请刷新页面后重试", "not_logged_in");
+          }
+          auth.dashboardToken = fresh.dashboardToken;
+          auth.accessExpiresAt = fresh.accessExpiresAt;
+          if (fresh.user) auth.user = fresh.user;
+          return napiRequest(method, path, auth, body, extraHeaders, true);
+        }, function (refreshError) {
+          if (refreshError && refreshError.kind === "not_logged_in") {
+            throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+          }
+          throw refreshError;
+        });
+      }
       return r.json().catch(function () { return null; }).then(function (json) {
         return { status: r.status, json: json };
       });
@@ -529,6 +759,25 @@ ${buildUpstreamLoginRuntimeSource()}
   function napi(method, path, auth, body) {
     return napiRequest(method, path, auth, body).then(function (r) {
       return r.json;
+    });
+  }
+
+  // 用某个 accessToken 做同源请求(不带 dashboard token/cookie),返回状态与 JSON。
+  function tokenRequest(method, path, token, userId) {
+    return fetch(path, {
+      method: method,
+      credentials: "omit",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "New-Api-User": String(userId),
+        "Cache-Control": "no-store",
+      },
+    }).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (json) {
+        return { status: r.status, ok: r.ok, json: json };
+      });
+    }, function () {
+      return { status: 0, ok: false, json: null };
     });
   }
 
@@ -634,19 +883,882 @@ ${buildUpstreamLoginRuntimeSource()}
     });
   }
 
-  // 生成长期 PAT(每次生成都会令旧 PAT 失效)。新版 Dashboard token 只用于鉴权
-  // 本次同源请求,真正交给囤囤鼠保存的是响应 data 中的 PAT。
-  function genAccessToken(auth) {
-    return napiRequest("GET", "/api/user/token", auth).then(function (r) {
+  // ── accessToken 获取:探测 → 复用 → 验证新建 → 旧版回退 ─────────────
+  // 新版 new-api(≥ rc.41)用 scoped access token 取代单 PAT;创建令牌必须提供
+  // 一次性 step-up proof。这里复刻上游前端的「验证方式 → proof → 建令牌」链路,
+  // 并保留旧版(GET /api/user/token)与过渡版(rc.34–40,POST + proof)的回退。
+
+  function findMethod(methods, name) {
+    for (var i = 0; i < methods.length; i++) {
+      var method = methods[i];
+      if (method && method.method === name && method.available === true) {
+        return method;
+      }
+    }
+    return null;
+  }
+
+  function unavailableReason(methods) {
+    for (var i = 0; i < methods.length; i++) {
+      var method = methods[i];
+      if (method && method.available === false &&
+        typeof method.reason === "string" && method.reason) {
+        return method.reason;
+      }
+    }
+    return "";
+  }
+
+  // 用户取消弹窗:抛 cancelled 标记,由 runQuickEntry 静默中止。
+  function cancelledOrValue(value) {
+    if (value == null) throw taggedError("", "cancelled");
+    return value;
+  }
+
+  function fetchVerificationMethods(auth, scope) {
+    return napiRequest(
+      "GET",
+      "/api/verify/methods?scope=" + encodeURIComponent(scope),
+      auth,
+    ).then(function (r) {
       if (r.status === 401) {
-        throw taggedError("登录状态已失效,请重试", "not_logged_in");
+        throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
       }
-      var token = r.json && r.json.success === true && r.json.data;
-      if (r.status < 200 || r.status >= 300 ||
-        typeof token !== "string" || !token.trim()) {
-        throw new Error(responseMessage(r.json, "获取 accessToken 失败"));
+      var data = r.json && r.json.success === true ? r.json.data : null;
+      if (!data) {
+        throw new Error(responseMessage(r.json, "读取验证方式失败(" + r.status + ")"));
       }
-      return token.trim();
+      return data;
+    });
+  }
+
+  // 业务失败是 HTTP 200 + success:false;返回 {ok:false, code, message} 供弹窗重试。
+  function postVerify(auth, body) {
+    return napiRequest("POST", "/api/verify", auth, body).then(function (r) {
+      if (r.status === 401) {
+        throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+      }
+      var json = r.json;
+      if (r.status >= 200 && r.status < 300 && json && json.success === false) {
+        return {
+          ok: false,
+          code: typeof json.code === "string" ? json.code : "",
+          message: responseMessage(json, "验证失败"),
+        };
+      }
+      var proof = json && json.success === true && json.data
+        ? json.data.proof_token
+        : null;
+      if (r.status >= 200 && r.status < 300 &&
+        typeof proof === "string" && proof) {
+        return { ok: true, proof: proof };
+      }
+      throw new Error(responseMessage(json, "验证失败(" + r.status + ")"));
+    });
+  }
+
+  // ── 密码加密传输(PASSWORD_LOGIN_ENCRYPTION_ENABLED 站点)────────────
+  var passwordEncryptionKey = null;
+
+  function base64FromBuffer(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var binary = "";
+    for (var i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  function pemToDerBuffer(pem) {
+    var body = String(pem)
+      .split("-----BEGIN PUBLIC KEY-----").join("")
+      .split("-----END PUBLIC KEY-----").join("");
+    var binary = atob(body.replace(/[^A-Za-z0-9+/=]/g, ""));
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function readPasswordEncryptionKey() {
+    if (passwordEncryptionKey) return Promise.resolve(passwordEncryptionKey);
+    return fetch("/api/user/login/encryption-key", {
+      credentials: "include",
+      headers: { "Cache-Control": "no-store" },
+    }).then(function (r) {
+      return r.json().catch(function () { return null; });
+    }).then(function (json) {
+      var data = json && json.success === true ? json.data : null;
+      if (!data || data.enabled !== true || !data.kid || !data.public_key) {
+        throw new Error("上游未开放密码加密传输");
+      }
+      passwordEncryptionKey = {
+        kid: String(data.kid),
+        publicKey: String(data.public_key),
+      };
+      return passwordEncryptionKey;
+    });
+  }
+
+  // 与上游前端一致:RSA-OAEP/SHA-256;超长密码用 v2 信封(AES-GCM 包裹)。
+  function encryptPasswordValue(password, key) {
+    var subtle = crypto && crypto.subtle;
+    if (!subtle) {
+      return Promise.reject(
+        new Error("当前页面不支持密码加密传输(需要 HTTPS),请刷新后重试"),
+      );
+    }
+    return subtle.importKey(
+      "spki",
+      pemToDerBuffer(key.publicKey),
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      false,
+      ["encrypt"],
+    ).then(function (publicKey) {
+      var encoder = new TextEncoder();
+      var plaintext = encoder.encode(password);
+      var maxBytes = (publicKey.algorithm.modulusLength / 8) - 66;
+      if (plaintext.byteLength <= maxBytes) {
+        return subtle.encrypt({ name: "RSA-OAEP" }, publicKey, plaintext)
+          .then(function (cipher) {
+            return {
+              password_encrypted: base64FromBuffer(cipher),
+              encryption_key_id: key.kid,
+            };
+          });
+      }
+      var secret = crypto.getRandomValues(new Uint8Array(32));
+      var nonce = crypto.getRandomValues(new Uint8Array(12));
+      return subtle.importKey("raw", secret, { name: "AES-GCM" }, false, ["encrypt"])
+        .then(function (aesKey) {
+          return Promise.all([
+            subtle.encrypt(
+              { name: "RSA-OAEP", label: encoder.encode("password-v2") },
+              publicKey,
+              secret,
+            ),
+            subtle.encrypt(
+              {
+                name: "AES-GCM",
+                iv: nonce,
+                additionalData: encoder.encode("password-v2:" + key.kid),
+              },
+              aesKey,
+              plaintext,
+            ),
+          ]);
+        }).then(function (parts) {
+          return {
+            password_encrypted: "v2." + base64FromBuffer(parts[0]) + "." +
+              base64FromBuffer(nonce.buffer) + "." + base64FromBuffer(parts[1]),
+            encryption_key_id: key.kid,
+          };
+        });
+    });
+  }
+
+  function verifyPassword(auth, scope, context, password, encryptionEnabled) {
+    var encrypted = encryptionEnabled
+      ? readPasswordEncryptionKey().then(function (key) {
+        return encryptPasswordValue(password, key);
+      })
+      : Promise.resolve(null);
+    return encrypted.then(function (payload) {
+      var body = { method: "password", scope: scope };
+      if (context) body.context = context;
+      if (payload) {
+        body.password_encrypted = payload.password_encrypted;
+        body.encryption_key_id = payload.encryption_key_id;
+      } else {
+        body.password = password;
+      }
+      return postVerify(auth, body);
+    });
+  }
+
+  function verifyTwoFactor(auth, scope, context, code) {
+    var body = { method: "2fa", scope: scope, code: String(code).trim() };
+    if (context) body.context = context;
+    return postVerify(auth, body);
+  }
+
+  // ── OAuth 授权验证(无密码账号设置密码时使用)──────────────────────
+  function fetchStatusData() {
+    return fetch("/api/status", {
+      credentials: "include",
+      headers: { "Cache-Control": "no-store" },
+    }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (body) {
+      return body && (body.data || body) || {};
+    }).catch(function () { return {}; });
+  }
+
+  // 与上游前端 buildOAuthAuthorizationUrl 保持一致。
+  function buildOAuthAuthorizationUrl(provider, state, status) {
+    if (provider === "github" && status.github_client_id) {
+      return "https://github.com/login/oauth/authorize?client_id=" +
+        encodeURIComponent(status.github_client_id) +
+        "&state=" + encodeURIComponent(state) + "&scope=user:email";
+    }
+    if (provider === "discord" && status.discord_client_id) {
+      var discord = new URL("https://discord.com/oauth2/authorize");
+      discord.searchParams.set("client_id", status.discord_client_id);
+      discord.searchParams.set("redirect_uri", location.origin + "/oauth/discord");
+      discord.searchParams.set("response_type", "code");
+      discord.searchParams.set("scope", "identify+openid");
+      discord.searchParams.set("state", state);
+      return discord.toString();
+    }
+    if (provider === "oidc" && status.oidc_authorization_endpoint &&
+      status.oidc_client_id) {
+      var oidc = new URL(status.oidc_authorization_endpoint);
+      oidc.searchParams.set("client_id", status.oidc_client_id);
+      oidc.searchParams.set("redirect_uri", location.origin + "/oauth/oidc");
+      oidc.searchParams.set("response_type", "code");
+      oidc.searchParams.set("scope", "openid profile email");
+      oidc.searchParams.set("state", state);
+      return oidc.toString();
+    }
+    if (provider === "linuxdo" && status.linuxdo_client_id) {
+      return "https://connect.linux.do/oauth2/authorize?response_type=code" +
+        "&client_id=" + encodeURIComponent(status.linuxdo_client_id) +
+        "&state=" + encodeURIComponent(state);
+    }
+    var customProviders = Array.isArray(status.custom_oauth_providers)
+      ? status.custom_oauth_providers
+      : [];
+    for (var i = 0; i < customProviders.length; i++) {
+      var custom = customProviders[i];
+      if (custom && custom.slug === provider && custom.authorization_endpoint) {
+        var url = new URL(custom.authorization_endpoint);
+        url.searchParams.set("client_id", custom.client_id);
+        url.searchParams.set("redirect_uri", location.origin + "/oauth/" + provider);
+        url.searchParams.set("response_type", "code");
+        url.searchParams.set("state", state);
+        if (custom.scopes) url.searchParams.set("scope", custom.scopes);
+        return url.toString();
+      }
+    }
+    throw new Error("未找到可用的第三方登录方式");
+  }
+
+  function oauthAuthorize(auth, scope, context, provider) {
+    return fetchStatusData().then(function (status) {
+      var payload = { provider: provider, intent: "verify", scope: scope };
+      if (context) payload.context = context;
+      return napiRequest("POST", "/api/oauth/state", auth, payload).then(function (r) {
+        if (r.status === 401) {
+          throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+        }
+        var data = r.json && r.json.success === true ? r.json.data : null;
+        if (!data || typeof data.flow_token !== "string" || !data.flow_token) {
+          throw new Error(responseMessage(r.json, "初始化 OAuth 授权失败(" + r.status + ")"));
+        }
+        var url = typeof data.authorization_url === "string" && data.authorization_url
+          ? data.authorization_url
+          : buildOAuthAuthorizationUrl(provider, data.flow_token, status);
+        return { state: data.flow_token, url: url };
+      });
+    });
+  }
+
+  // 同步打开弹窗(此时还持有用户手势,避免异步等待后被拦截),拿到 state 后
+  // 再写标记并跳转;关窗即取消,超时兜底。
+  function openOAuthPopupWindow() {
+    var popup = window.open("about:blank", "_blank");
+    if (!popup) {
+      return { error: new Error("OAuth 弹窗被浏览器拦截,请允许弹窗后重试") };
+    }
+    return { popup: popup };
+  }
+
+  function waitForOAuthCallback(auth, popup, provider, state, url) {
+    if (popup.closed) {
+      return Promise.reject(new Error("已取消 OAuth 授权"));
+    }
+    try {
+      var storage = popup.sessionStorage;
+      var key = "oauth_popup_flow:" + provider;
+      var marker = JSON.stringify({ state: state, intent: "verify" });
+      storage.setItem(key, marker);
+      if (storage.getItem(key) !== marker) throw new Error("storage unavailable");
+    } catch (_) {
+      try { popup.close(); } catch (__) {}
+      return Promise.reject(new Error("浏览器拒绝 OAuth 弹窗临时存储,请检查隐私设置"));
+    }
+    try { popup.location.replace(url); } catch (_) {}
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var poll = null;
+      var startedAt = Date.now();
+      function cleanup() {
+        window.removeEventListener("message", onMessage);
+        clearInterval(poll);
+      }
+      function finish(error, code) {
+        if (done) return;
+        done = true;
+        cleanup();
+        try {
+          popup.postMessage({
+            type: "oauth:popup:result",
+            intent: "verify",
+            provider: provider,
+            state: state,
+            success: !error,
+            message: error ? String(error.message || error) : "",
+          }, location.origin);
+        } catch (_) {}
+        try { popup.close(); } catch (_) {}
+        if (error) reject(error);
+        else resolve(code);
+      }
+      function onMessage(event) {
+        if (!event || event.origin !== location.origin || event.source !== popup) {
+          return;
+        }
+        var data = event.data;
+        if (!data || data.type !== "oauth:popup:callback" ||
+          data.intent !== "verify" || data.provider !== provider ||
+          data.state !== state) {
+          return;
+        }
+        if (typeof data.error === "string" && data.error) {
+          var description = typeof data.errorDescription === "string" && data.errorDescription
+            ? data.errorDescription
+            : "";
+          // 把 provider 的拒绝回传给上游回调端点消费掉这次 flow(与上游前端一致),
+          // 避免遗留待过期的授权记录;失败也不影响本地报错。
+          var errorQuery = "state=" + encodeURIComponent(state) +
+            "&error=" + encodeURIComponent(data.error) +
+            (description ? "&error_description=" + encodeURIComponent(description) : "");
+          napiRequest(
+            "GET",
+            "/api/oauth/" + encodeURIComponent(provider) + "?" + errorQuery,
+            auth,
+          ).catch(function () {});
+          finish(new Error(description || ("OAuth 授权失败: " + data.error)));
+          return;
+        }
+        if (typeof data.code !== "string" || !data.code) return;
+        finish(null, data.code);
+      }
+      window.addEventListener("message", onMessage);
+      poll = setInterval(function () {
+        if (popup.closed) {
+          finish(new Error("已取消 OAuth 授权"));
+          return;
+        }
+        if (Date.now() - startedAt > OAUTH_POPUP_DEADLINE_MS) {
+          finish(new Error("OAuth 授权超时,请重试"));
+        }
+      }, OAUTH_POPUP_POLL_MS);
+    });
+  }
+
+  function verifyOAuth(auth, scope, context, provider) {
+    var opened = openOAuthPopupWindow();
+    if (opened.error) return Promise.reject(opened.error);
+    var popup = opened.popup;
+    return oauthAuthorize(auth, scope, context, provider).then(function (authorization) {
+      return waitForOAuthCallback(auth, popup, provider, authorization.state, authorization.url)
+        .then(function (code) {
+          var query = "state=" + encodeURIComponent(authorization.state) +
+            "&code=" + encodeURIComponent(code);
+          return napiRequest(
+            "GET",
+            "/api/oauth/" + encodeURIComponent(provider) + "?" + query,
+            auth,
+          );
+        }).then(function (r) {
+          if (r.status === 401) {
+            throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+          }
+          var json = r.json;
+          var proof = json && json.success === true && json.data
+            ? json.data.proof_token
+            : null;
+          if (r.status >= 200 && r.status < 300 &&
+            typeof proof === "string" && proof) {
+            return proof;
+          }
+          throw new Error(responseMessage(json, "OAuth 验证失败(" + r.status + ")"));
+        });
+    }).catch(function (error) {
+      try { popup.close(); } catch (_) {}
+      throw error;
+    });
+  }
+
+  // ── 令牌探测 / 复用 / 新建 ─────────────────────────────────────────
+  function probeScopedSupport(auth) {
+    if (!auth.dashboardToken) return Promise.resolve({ supported: false });
+    return napiRequest("GET", "/api/user/access_tokens", auth).then(function (r) {
+      if (r.status === 401) {
+        throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+      }
+      if (r.status === 429) {
+        throw new Error("上游请求过于频繁,请稍后重试");
+      }
+      if (r.status >= 500) {
+        throw new Error("上游服务暂时不可用(" + r.status + "),请稍后重试");
+      }
+      var json = r.json;
+      if (r.status >= 200 && r.status < 300 && json && json.success === true && json.data) {
+        return { supported: true };
+      }
+      return { supported: false };
+    });
+  }
+
+  // 只读探测:令牌可登录、可读 APIKey(可选读签到);403 视为缺权限。
+  function probeToken(userId, token) {
+    return tokenRequest("GET", "/api/user/self", token, userId).then(function (self) {
+      if (!self.ok || !self.json || self.json.success !== true || !self.json.data) {
+        return { ok: false, message: "访问令牌无效或与当前账号不匹配" };
+      }
+      if (String(self.json.data.id) !== String(userId)) {
+        return { ok: false, message: "访问令牌属于其他账号" };
+      }
+      return tokenRequest("GET", "/api/token/?p=1&page_size=10", token, userId)
+        .then(function (list) {
+          if (list.status === 403) {
+            return { ok: false, message: "令牌缺少查看 APIKey 的权限(api_key:read)" };
+          }
+          return tokenRequest("GET", "/api/user/checkin", token, userId)
+            .then(function (checkin) {
+              if (checkin.status === 403) {
+                return { ok: false, message: "令牌缺少签到相关权限(wallet:read)" };
+              }
+              return { ok: true };
+            });
+        });
+    });
+  }
+
+  // scoped 令牌指纹 = hex(sha256(token)),与上游 token_ref 一致,可精确校验
+  // 权限与过期时间;HTTP 页面无 subtle crypto 时跳过(只依赖探测)。
+  function tokenRefOf(token) {
+    var subtle = crypto && crypto.subtle;
+    if (!subtle || typeof subtle.digest !== "function") {
+      return Promise.resolve(null);
+    }
+    var data = new TextEncoder().encode(String(token).replace(/[ ]+$/g, ""));
+    return subtle.digest("SHA-256", data).then(function (digest) {
+      var bytes = new Uint8Array(digest);
+      var hex = "";
+      for (var i = 0; i < bytes.length; i++) {
+        var part = bytes[i].toString(16);
+        hex += part.length === 1 ? "0" + part : part;
+      }
+      return hex;
+    }).catch(function () { return null; });
+  }
+
+  function scopedTokenCheck(auth, token, strict) {
+    return tokenRefOf(token).then(function (ref) {
+      if (!ref) return { ok: true };
+      return napiRequest("GET", "/api/user/access_tokens", auth).then(function (r) {
+        if (r.status === 429) {
+          return { ok: false, message: "上游请求过于频繁,请稍后重试" };
+        }
+        if (r.status >= 500) {
+          return { ok: false, message: "上游服务暂时不可用(" + r.status + "),请稍后重试" };
+        }
+        var data = r.json && r.json.success === true ? r.json.data : null;
+        if (!data || !Array.isArray(data.items)) return { ok: true };
+        var item = null;
+        for (var i = 0; i < data.items.length; i++) {
+          if (data.items[i] && data.items[i].token_ref === ref) {
+            item = data.items[i];
+            break;
+          }
+        }
+        if (!item) {
+          // 复用场景(严格):指纹不在列表里说明令牌已被删除/轮换,应重建;
+          // 手动粘贴场景:分叉站点的指纹算法可能不同,放行走只读探测结论。
+          return strict
+            ? { ok: false, message: "该令牌已不在访问令牌列表中,请重新创建" }
+            : { ok: true };
+        }
+        var scopes = Array.isArray(item.scopes) ? item.scopes : [];
+        var missing = [];
+        for (var j = 0; j < PAT_SCOPES.length; j++) {
+          if (scopes.indexOf(PAT_SCOPES[j]) === -1) missing.push(PAT_SCOPES[j]);
+        }
+        if (missing.length) {
+          return { ok: false, message: "令牌缺少权限:" + missing.join("、") };
+        }
+        if (Number(item.expires_at) > 0) {
+          return { ok: false, message: "令牌不是「永不过期」,请重新创建" };
+        }
+        return { ok: true };
+      });
+    });
+  }
+
+  function reuseWhenPossible(auth, storedToken, scoped) {
+    var token = storedToken == null ? "" : String(storedToken).trim();
+    if (!token) return Promise.resolve(null);
+    var isScopedToken = token.indexOf("nap_") === 0;
+    if (scoped.supported && !isScopedToken) return Promise.resolve(null);
+    return probeToken(auth.userId, token).then(function (probe) {
+      if (!probe.ok) return null;
+      if (!scoped.supported || !isScopedToken) return token;
+      return scopedTokenCheck(auth, token, true).then(function (check) {
+        return check.ok ? token : null;
+      });
+    });
+  }
+
+  function createScopedToken(auth, proof) {
+    return napiRequest("POST", "/api/user/access_tokens", auth, {
+      name: PAT_NAME,
+      scopes: PAT_SCOPES,
+      expires_at: PAT_EXPIRES_AT,
+    }, { "X-Security-Proof": proof }).then(function (r) {
+      var json = r.json;
+      var token = json && json.success === true && json.data
+        ? json.data.token
+        : null;
+      if (r.status >= 200 && r.status < 300 &&
+        typeof token === "string" && token.trim()) {
+        return token.trim();
+      }
+      if (json && json.code === "ACCESS_TOKEN_LIMIT") {
+        throw new Error("上游访问令牌数量已达上限(20 个),请先在「安全」页面删除旧令牌");
+      }
+      throw new Error(responseMessage(json, "创建访问令牌失败(" + r.status + ")"));
+    });
+  }
+
+  // 旧版(≤ rc.33)直接 GET 明文;rc.34–40 该端点要求 X-Security-Proof。
+  function legacyAccessTokenFlow(auth) {
+    return napiRequest("GET", "/api/user/token", auth).then(function (r) {
+      var json = r.json;
+      if (r.status >= 200 && r.status < 300 && json && json.success === true &&
+        typeof json.data === "string" && json.data.trim()) {
+        return json.data.trim();
+      }
+      if (r.status === 401) {
+        throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+      }
+      var code = json && json.code;
+      if (r.status === 403 && typeof code === "string" &&
+        code.indexOf("SECURITY_PROOF") === 0) {
+        return withVerification(auth, { supported: false, context: null }, function (proof) {
+          return napiRequest("POST", "/api/user/token", auth, null, {
+            "X-Security-Proof": proof,
+          }).then(function (r2) {
+            var json2 = r2.json;
+            var token = json2 && json2.success === true ? json2.data : null;
+            if (r2.status >= 200 && r2.status < 300 &&
+              typeof token === "string" && token.trim()) {
+              return token.trim();
+            }
+            throw new Error(responseMessage(json2, "生成 accessToken 失败(" + r2.status + ")"));
+          });
+        });
+      }
+      throw new Error(responseMessage(json, "获取 accessToken 失败(" + r.status + ")"));
+    });
+  }
+
+  function passwordDialog(auth, request, initialError) {
+    var username = auth.user && auth.user.username
+      ? String(auth.user.username)
+      : "";
+    return ttsDialog({
+      title: "安全验证",
+      desc: "new-api 要求验证身份后才能创建访问令牌。",
+      note: username ? ("账号:" + username) : "",
+      error: initialError || "",
+      input: { type: "password", label: "登录密码", value: "" },
+      submitText: "验证",
+      action: function (values) {
+        var password = String(values.input || "");
+        if (!password) return Promise.resolve({ error: "请输入登录密码" });
+        return verifyPassword(
+          auth,
+          request.scope,
+          request.context,
+          password,
+          request.encryptionEnabled,
+        ).then(function (result) {
+          if (result.ok) {
+            return request.complete(result.proof).then(function (token) {
+              return { done: true, value: token };
+            });
+          }
+          if (result.code === "SECURITY_VERIFICATION_FAILED") {
+            return { error: "密码不正确,请重试" };
+          }
+          if (result.code === "SECURITY_VERIFICATION_LOCKED") {
+            return { error: result.message || "验证暂时锁定,请稍后再试" };
+          }
+          return { error: result.message || "验证失败,请重试" };
+        });
+      },
+    }).then(cancelledOrValue);
+  }
+
+  function passwordFlow(auth, request) {
+    var username = auth.user && auth.user.username
+      ? String(auth.user.username)
+      : "";
+    var silent = username
+      ? verifyPassword(
+        auth,
+        request.scope,
+        request.context,
+        username,
+        request.encryptionEnabled,
+      )
+      : Promise.resolve({ ok: false, code: "NO_USERNAME", message: "" });
+    return silent.then(function (result) {
+      if (result.ok) return request.complete(result.proof);
+      var initialError = result.code === "SECURITY_VERIFICATION_FAILED"
+        ? ""
+        : (result.message || "");
+      return passwordDialog(auth, request, initialError);
+    });
+  }
+
+  function twoFactorFlow(auth, request) {
+    return ttsDialog({
+      title: "安全验证",
+      desc: "该账号启用了两步验证,请输入动态验证码后继续。",
+      input: {
+        type: "text",
+        label: "动态验证码",
+        value: "",
+        placeholder: "6 位动态码或备用码",
+      },
+      submitText: "验证",
+      action: function (values) {
+        var code = String(values.input || "").trim();
+        if (!code) return Promise.resolve({ error: "请输入动态验证码" });
+        return verifyTwoFactor(auth, request.scope, request.context, code)
+          .then(function (result) {
+            if (result.ok) {
+              return request.complete(result.proof).then(function (token) {
+                return { done: true, value: token };
+              });
+            }
+            if (result.code === "SECURITY_VERIFICATION_FAILED") {
+              return { error: "验证码不正确,请重试" };
+            }
+            if (result.code === "SECURITY_VERIFICATION_LOCKED") {
+              return {
+                error: result.message ||
+                  "验证失败次数过多,已临时锁定,请稍后再试",
+              };
+            }
+            return { error: result.message || "验证失败,请重试" };
+          });
+      },
+    }).then(cancelledOrValue);
+  }
+
+  function setAccountPassword(auth, proof, password) {
+    return napiRequest("PUT", "/api/user/self", auth, { password: password }, {
+      "X-Security-Proof": proof,
+    }).then(function (r) {
+      if (r.status === 401) {
+        throw taggedError("登录状态已失效,请刷新页面后重试", "not_logged_in");
+      }
+      var json = r.json;
+      if (r.status >= 200 && r.status < 300 && json && json.success === true) {
+        // 设置密码会提升 auth_version 并轮换当前会话,采用响应里的新 dashboard token。
+        var data = json.data || null;
+        if (data && typeof data.access_token === "string" && data.access_token) {
+          auth.dashboardToken = data.access_token;
+          var expiresAt = Number(data.access_expires_at);
+          if (isFinite(expiresAt) && expiresAt > 0) auth.accessExpiresAt = expiresAt;
+        }
+        return;
+      }
+      var code = json && json.code;
+      if (code === "PASSWORD_POLICY_REJECTED") {
+        throw new Error(responseMessage(json, "密码不符合要求(8–128 个字符)"));
+      }
+      if (code === "SECURITY_PROOF_EXPIRED" || code === "SECURITY_PROOF_CONSUMED" ||
+        code === "SECURITY_PROOF_INVALID") {
+        throw new Error("验证已过期,请重试");
+      }
+      throw new Error(responseMessage(json, "设置密码失败(" + r.status + ")"));
+    });
+  }
+
+  // 无密码(OAuth-only)账号:设置密码需要一次 account.password.set 的 OAuth
+  // 授权;设置成功后立即用新密码静默验证并创建令牌。
+  function setPasswordFlow(auth, request) {
+    var username = auth.user && auth.user.username
+      ? String(auth.user.username)
+      : "";
+    var providerOptions = request.providers.map(function (provider) {
+      return {
+        value: String(provider.slug),
+        label: String(provider.name || provider.slug),
+      };
+    });
+    var firstProvider = providerOptions.length ? providerOptions[0] : null;
+    // 设置密码成功后账号已具备密码:重试时不能再走 account.password.set
+    // (上游会对已有密码的账号直接拒绝),改为直接用该密码验证并建令牌。
+    var passwordSet = false;
+    return ttsDialog({
+      title: "设置账号密码",
+      desc: "该账号未设置密码,且 new-api 要求先完成一次第三方登录授权验证。\\n" +
+        "脚本将为该账号设置密码(默认使用用户名),随后创建访问令牌并保存。",
+      note: "密码需为 8–128 个字符;设置密码会登出该账号的其他浏览器会话。",
+      input: {
+        type: "password",
+        label: "新密码",
+        value: username,
+        placeholder: "8–128 个字符",
+      },
+      select: providerOptions.length > 1
+        ? { label: "使用授权方式", options: providerOptions }
+        : null,
+      submitText: "授权并继续",
+      action: function (values) {
+        var password = String(values.input || "");
+        var passwordLength = Array.from(password).length;
+        if (passwordSet) {
+          return verifyPassword(
+            auth,
+            request.scope,
+            request.context,
+            password,
+            request.encryptionEnabled,
+          ).then(function (result) {
+            if (!result.ok) {
+              throw new Error("密码已设置成功;请使用刚才设置的密码继续验证:" +
+                (result.message || "验证失败"));
+            }
+            return request.complete(result.proof);
+          }).then(function (token) {
+            return { done: true, value: token };
+          });
+        }
+        if (passwordLength < 8 || passwordLength > 128) {
+          return Promise.resolve({ error: "密码需为 8–128 个字符" });
+        }
+        var provider = values.select || (firstProvider ? firstProvider.value : "");
+        if (!provider) {
+          return Promise.resolve({ error: "未找到可用的第三方登录方式" });
+        }
+        return verifyOAuth(auth, PASSWORD_SET_SCOPE, null, provider)
+          .then(function (proof) {
+            return setAccountPassword(auth, proof, password);
+          }).then(function () {
+            passwordSet = true;
+            return verifyPassword(
+              auth,
+              request.scope,
+              request.context,
+              password,
+              request.encryptionEnabled,
+            );
+          }).then(function (result) {
+            if (!result.ok) {
+              throw new Error(result.message || "密码验证失败,请重试");
+            }
+            return request.complete(result.proof);
+          }).then(function (token) {
+            return { done: true, value: token };
+          });
+      },
+    }).then(cancelledOrValue);
+  }
+
+  function manualFlow(auth, request, scopedSupported, extraReason) {
+    var lines = [];
+    if (extraReason) lines.push(extraReason);
+    var reason = unavailableReason(request.methods);
+    if (reason) lines.push("提示:" + reason);
+    if (scopedSupported) {
+      lines.push("该账号需要用 Passkey 或脚本尚未支持的验证方式,无法自动创建访问令牌。");
+      lines.push("请在上游「安全」页面手动创建访问令牌:");
+      lines.push("1. 名称任意,权限勾选以下全部:" + PAT_SCOPES.join("、"));
+      lines.push("2. 过期时间选择「永不过期」;");
+      lines.push("3. 复制生成的令牌(nap_ 开头)粘贴到下方。");
+    } else {
+      lines.push("该账号需要用脚本尚未支持的验证方式,请先在 new-api 安全设置中");
+      lines.push("生成访问令牌(可能需要完成验证),然后粘贴到下方。");
+    }
+    return ttsDialog({
+      title: "手动创建访问令牌",
+      desc: lines.join("\\n"),
+      link: { label: "打开上游安全页面(新标签)", href: location.origin + "/security" },
+      input: { type: "text", label: "访问令牌", value: "", placeholder: "nap_..." },
+      submitText: "使用该令牌",
+      action: function (values) {
+        var token = String(values.input || "").trim();
+        if (!token) return Promise.resolve({ error: "请粘贴访问令牌" });
+        if (scopedSupported && token.indexOf("nap_") !== 0) {
+          return Promise.resolve({
+            error: "请粘贴新版访问令牌(nap_ 开头);旧版 accessToken 即将失效",
+          });
+        }
+        return probeToken(auth.userId, token).then(function (probe) {
+          if (!probe.ok) return { error: probe.message };
+          if (!scopedSupported) return { done: true, value: token };
+          return scopedTokenCheck(auth, token, false).then(function (check) {
+            if (!check.ok) return { error: check.message };
+            return { done: true, value: token };
+          });
+        });
+      },
+    }).then(cancelledOrValue);
+  }
+
+  function hasSubtleCrypto() {
+    return !!(crypto && crypto.subtle);
+  }
+
+  // HTTP 明文页面无法用 WebCrypto 做 RSA-OAEP;加密站点只能走手动粘贴。
+  var ENCRYPTION_HTTP_REASON =
+    "提示:该站点启用了密码加密传输,当前 HTTP 页面无法完成加密;";
+
+  function withVerification(auth, options, complete) {
+    return fetchVerificationMethods(auth, ACCESS_TOKEN_SCOPE).then(function (data) {
+      var methods = Array.isArray(data.methods) ? data.methods : [];
+      var providers = Array.isArray(data.oauth_providers) ? data.oauth_providers : [];
+      var request = {
+        scope: ACCESS_TOKEN_SCOPE,
+        context: options.context,
+        encryptionEnabled: data.password_encryption_enabled === true,
+        complete: complete,
+        methods: methods,
+        providers: providers,
+      };
+      var passwordNeeded = Boolean(findMethod(methods, "password")) ||
+        (!findMethod(methods, "2fa") && providers.length > 0);
+      if (passwordNeeded && request.encryptionEnabled && !hasSubtleCrypto()) {
+        return manualFlow(auth, request, options.supported === true, ENCRYPTION_HTTP_REASON);
+      }
+      if (findMethod(methods, "password")) return passwordFlow(auth, request);
+      if (findMethod(methods, "2fa")) return twoFactorFlow(auth, request);
+      if (providers.length) return setPasswordFlow(auth, request);
+      return manualFlow(auth, request, options.supported === true);
+    });
+  }
+
+  function ensureAccessToken(auth, storedToken) {
+    return probeScopedSupport(auth).then(function (scoped) {
+      return reuseWhenPossible(auth, storedToken, scoped).then(function (reused) {
+        if (reused) return reused;
+        if (scoped.supported) {
+          return withVerification(auth, {
+            supported: true,
+            context: { scopes: PAT_SCOPES, expires_at: PAT_EXPIRES_AT },
+          }, function (proof) {
+            return createScopedToken(auth, proof);
+          });
+        }
+        return legacyAccessTokenFlow(auth);
+      });
     });
   }
 
@@ -730,21 +1842,23 @@ ${buildUpstreamLoginRuntimeSource()}
     if (quickBusy) return;
     var auth = null;
     var wasRecorded = false;
+    var recordedAccount = null;
     var origin = normOrigin(location.origin);
     var siteId = null;
     var accessToken = null;
     quickBusy = true;
-    // 1.解析并验证当前用户 → 2.确认覆盖 → 3.保存站点 → 4.取 PAT →
+    // 1.解析并验证当前用户 → 2.确认覆盖 → 3.保存站点 → 4.获取/复用令牌 →
     // 5.确保 APIKey → 6.保存账号(均 upsert) → 7.签到一次。
     TTS_UPSTREAM_UI.progress("验证登录…", 5);
     resolveAuth().then(function (resolved) {
       auth = resolved;
-      return refreshRecorded(auth);
-    }).then(function (found) {
-      wasRecorded = found;
-      if (found && !confirm(
-        "该账号已录入。重新保存会重新生成 new-api access token" +
-          "(旧 token 立即失效)并覆盖已有记录,确定继续?",
+      return findRecordedAccount(auth);
+    }).then(function (account) {
+      recordedAccount = account;
+      wasRecorded = !!account;
+      if (wasRecorded && !confirm(
+        "该账号已录入。重新保存会复用已保存的 access token;" +
+          "令牌不可用时会创建新令牌(可能需要验证身份)并覆盖已有记录,确定继续?",
       )) {
         throw taggedError("", "cancelled");
       }
@@ -753,7 +1867,10 @@ ${buildUpstreamLoginRuntimeSource()}
     }).then(function (r) {
       siteId = checkStatus(r, "保存站点").id;
       TTS_UPSTREAM_UI.progress("获取令牌…", 40);
-      return genAccessToken(auth);
+      return ensureAccessToken(
+        auth,
+        recordedAccount && recordedAccount.access_token,
+      );
     }).then(function (token) {
       accessToken = token;
       // 保存账号前确保至少 1 个 APIKey(尽力而为,内部已吞错,失败不阻断保存)。
@@ -768,7 +1885,6 @@ ${buildUpstreamLoginRuntimeSource()}
       });
     }).then(function (r) {
       var accountId = checkStatus(r, "保存账号").id;
-      recorded = true;
       // 保存成功后顺带签到一次(尽力而为,不改变录入成功结果)。
       TTS_UPSTREAM_UI.progress("签到中…", 90);
       return tryCheckin(accountId);
@@ -796,10 +1912,8 @@ ${buildUpstreamLoginRuntimeSource()}
       TTS_UPSTREAM_UI.idleClick(runQuickEntry);
       TTS_UPSTREAM_UI.showIdle();
       resolveAuth().then(function (auth) {
-        return refreshRecorded(auth);
-      }).catch(function () {
-        recorded = false;
-      });
+        return findRecordedAccount(auth);
+      }).catch(function () {});
     });
   }
 

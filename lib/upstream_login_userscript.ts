@@ -60,7 +60,7 @@ export function buildUpstreamLoginRuntimeSource(): string {
     ? unsafeWindow
     : globalThis;
 
-  var SCRIPT_VERSION = "2.0.2";
+  var SCRIPT_VERSION = "2.1.0";
   var MARKER = "__TTS_UPSTREAM_LOGIN_SCRIPT__";
   // 合并后的「囤囤鼠脚本」会注入 TTS_UPSTREAM_UI,用于把退出现有登录态、
   // 验证令牌等步骤的进度显示到页面小胶囊按钮;CloakBrowser automation 没有该
@@ -443,10 +443,12 @@ export function buildUpstreamLoginRuntimeSource(): string {
     return path.slice(0, end);
   }
 
-  // PAT 免登没有上游浏览器 Session。Passkey 状态/管理与登录会话管理属于「Session
-  // 专属」端点:上游会对 PAT 返回 401/403,而上游前端把 401 当成登录过期并清掉
-  // localStorage.user,连带把免登状态一起清掉。这里对这些端点做响应兜底:成功响应
-  // (新版 new-api 的 passkey 接受 PAT)原样透传,鉴权失败则改写成合成结果。
+  // PAT 免登没有上游浏览器 Session。Passkey 状态/管理、登录会话管理与访问令牌
+  // 列表属于「Session 专属」端点:上游会对 PAT 返回 401/403或业务级拒绝,而上游
+  // 前端可能把鉴权失败当成登录过期,连带清掉 localStorage.user 与免登状态。这里
+  // 对这些端点做响应兜底:成功响应(新版 new-api 的 passkey 接受 PAT)原样透传,
+  // 鉴权失败则改写成合成结果。注意 access_tokens 只兜底列表端点本身:其子路径
+  // (/catalog、/scopes、/:id)返回形状不同,合成列表会破坏上游安全页渲染。
   function sessionOnlyKind(url) {
     var path = stripTrailingSlash(url.pathname);
     if (path === "/api/user/passkey" || path.indexOf("/api/user/passkey/") === 0) {
@@ -454,6 +456,9 @@ export function buildUpstreamLoginRuntimeSource(): string {
     }
     if (path === "/api/user/sessions" || path.indexOf("/api/user/sessions/") === 0) {
       return "sessions";
+    }
+    if (path === "/api/user/access_tokens") {
+      return "access_tokens";
     }
     return null;
   }
@@ -468,11 +473,16 @@ export function buildUpstreamLoginRuntimeSource(): string {
     if (String(method || "GET").toUpperCase() !== "GET") {
       return {
         success: false,
-        message: "囤囤鼠 PAT 免登模式不支持该 Passkey / 会话操作",
+        message: kind === "access_tokens"
+          ? "囤囤鼠 PAT 免登模式不支持管理访问令牌"
+          : "囤囤鼠 PAT 免登模式不支持该 Passkey / 会话操作",
       };
     }
     if (kind === "passkey") {
       return { success: true, message: "", data: { enabled: false } };
+    }
+    if (kind === "access_tokens") {
+      return { success: true, message: "", data: { items: [], legacy: null } };
     }
     return { success: true, message: "", data: [] };
   }

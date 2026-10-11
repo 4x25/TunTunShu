@@ -604,7 +604,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
   `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「囤囤鼠脚本」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装合并后的
-  唯一油猴脚本(`lib/userscript.ts`,版本 `2.0.2`),它同时提供「快捷录入」与 「上游
+  唯一油猴脚本(`lib/userscript.ts`,版本 `2.1.0`),它同时提供「快捷录入」与 「上游
   PAT 免登」。脚本在页面左下角注入唯一的小胶囊按钮:免登状态显示
   「免登中(用户名)」,点击后 `confirm` 确认再退出;其他状态显示「快捷录入」;
   录入或免登前置进行中则按步骤显示文案与进度条。小胶囊初始停靠左下角(20px),
@@ -617,10 +617,40 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   登录态解析遵循 **旧版优先、新版兜底**:先读取 `localStorage.user` 并以
   `/api/user/self` 验证旧 session; 本地用户缺失/无效或旧验证返回 401 时,才调
   `POST /api/user/auth/refresh` 获取新版 Dashboard Bearer token。短期 Dashboard
-  token 仅在脚本内存中用于同源 new-api 请求,最终保存到囤囤鼠的是
-  `/api/user/token` 新生成的长期 access token。已录入判定会用 origin/userId
-  搜索分页后台 API 并逐页精确匹配,避免记录不在第一页时绕过覆盖确认。保存账号前
-  `ensureApiKeys` 确保该用户 ≥1 个 APIKey:为 0 时按可用分组各建一个
+  token 仅在脚本内存中用于同源 new-api 请求,绝不交给囤囤鼠。 **长期 access token
+  按上游版本分流获取**: ① **复用**:已录入账号行里的 `access_token`(TTS
+  列表接口原样返回)若通过只读探测
+  (`/api/user/self`、`/api/token/`、`/api/user/checkin`,403
+  视为缺权限)即直接复用, 不触发验证;对新版上游要求 `nap_` 前缀(scoped 令牌),并用
+  sha256 指纹与 `GET /api/user/access_tokens` 的 `token_ref`
+  精确核对权限与过期时间——指纹查不到(已删除/轮换)、旧 PAT、权限不全或带过期时间
+  的令牌一律改为新建(HTTP 页面无 `crypto.subtle`,或列表查询本身失败时跳过指纹
+  核对,退化为只读探测结论)。 ② **新版 new-api(≥ rc.41)**:探测
+  `GET /api/user/access_tokens` 返回 200 时, 创建 scoped 令牌
+  `POST /api/user/access_tokens`(dashboard token TTL 15 分钟,同源请求收到 401
+  时脚本会自动 refresh 一次再重试)——名称「囤囤鼠」、完整个人域 9 项
+  权限(profile:read/write、api_key:read/write/reveal、wallet:read/write、usage:read、
+  account_security:read)、`expires_at:0` 永不过期;创建前用
+  `GET /api/verify/methods?scope=access_token.generate` 选择验证方式并取得一次性
+  proof(`POST /api/verify`,60 秒有效、单次消费): 有 `password` →
+  先静默**用用户名当密码**尝试,失败(`SECURITY_VERIFICATION_FAILED`)
+  再弹窗输入密码;有 `2fa` → 弹窗输入 6 位动态码或备用码;仅 `oauth`(无密码账号)→
+  弹窗输入新密码(默认用户名,8–128 位),先完成一次 OAuth 授权弹窗
+  (`POST /api/oauth/state` → 弹窗写 sessionStorage 标记并跳转授权页 → 回调页
+  postMessage 回传 code → `GET /api/oauth/:provider` 换取 `account.password.set`
+  的 proof)再 `PUT /api/user/self` 设置密码(采用响应里轮换后的 dashboard token),
+  随后用该密码静默验证;仅 `passkey` / 验证被锁等异常 → 手动引导:在
+  `<origin>/security`
+  创建令牌后粘贴回弹窗,粘贴令牌同样按指纹核对权限。密码/动态码只发同源
+  `/api/verify`,不落任何存储;`PASSWORD_LOGIN_ENCRYPTION_ENABLED`
+  站点按上游前端用 WebCrypto RSA-OAEP(v2 信封兼容长密码)加密提交,HTTP 明文页面无
+  SubtleCrypto 时直接转手动粘贴(不进入密码路径)。 ③
+  **rc.34–40**:`GET /api/user/token` 返回 `SECURITY_PROOF_REQUIRED` 时走同一验证
+  流程,再以 `POST /api/user/token` + `X-Security-Proof`(该版本 proof 无
+  context)生成。 ④ **≤ rc.33**:`GET /api/user/token` 直接返回明文(旧行为)。
+  已录入判定会用 origin/userId 搜索分页后台 API
+  并逐页精确匹配,避免记录不在第一页时 绕过覆盖确认。保存账号前 `ensureApiKeys`
+  确保该用户 ≥1 个 APIKey:为 0 时按可用分组各建一个
   `unlimited_quota`、`expired_time:
   -1`(**必须显式传 -1**,零值 0 会被 new-api
   当作已过期)的 `DEFAULT` 密钥;全程 best-effort,且只回传
@@ -628,7 +658,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **上游账号 PAT 免登**:账号行「登录」渲染为真实
   `<a target="_blank"
   rel="noopener noreferrer">`:仅当当前页检测到脚本同步暴露的
-  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.2"`
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.0"`
   (`buildAccountLoginHref`)时才把
   `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...` 写入
   href,交给浏览器原生新标签打开(支持中键/右键复制链接);未安装或版本不符时
@@ -659,14 +689,16 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   PAT,`access_expires_at=253402300799`,其中 `session`
   只是前端结构校验所需的占位对象,**不会在 new-api 后端创建 Session**。脚本禁止
   `/api/user/token` 落网,不会生成或轮换 PAT。Session
-  管理、2FA、Passkey、Security Proof、Playground 等真实 Session
+  管理、2FA、Passkey、Security Proof、访问令牌管理、Playground 等真实 Session
   专属功能不受支持;这些端点可能对 PAT 返回 401/403,而上游前端把 401 当作登录
-  过期并清掉 `localStorage.user`——runtime 对 `/api/user/passkey*` 与
-  `/api/user/sessions*` 做响应兜底:成功响应(新版 passkey 接受 PAT)原样透传,
-  鉴权失败时把 GET 改写为 `{success:true,data:{enabled:false}}` /
-  `{success:true,data:[]}`,写操作降级为 HTTP 200 的业务失败,避免误触发登出;
-  WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch 与其他 realm
-  也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
+  过期并清掉 `localStorage.user`——runtime 对 `/api/user/passkey*`、
+  `/api/user/sessions*` 与 `/api/user/access_tokens`(仅列表端点;`/catalog`、
+  `/scopes`、`/:id` 等子路径返回形状不同,不兜底)做响应兜底:成功响应 (新版
+  passkey 接受 PAT)原样透传,鉴权失败时把 GET 改写为
+  `{success:true,data:{enabled:false}}` / `{success:true,data:[]}` /
+  `{success:true,data:{items:[],legacy:null}}`,写操作降级为 HTTP 200 的业务失败,
+  避免误触发登出; WebSocket、原生 EventSource、sendBeacon、Worker 内 fetch
+  与其他 realm 也不承诺拦截。上游原生 logout 或旧版清除 `localStorage.user/uid`
   时会立即删除免登状态并停用当前页补丁,避免 SPA 同页重新登录后仍误用旧
   PAT;点击小胶囊的「免登中(用户名)」并 confirm 后统一退出,导航旧版兼容路径
   `/login`(新版会自行重定向到 `/sign-in`)。
@@ -689,13 +721,17 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `lib/sse_test.ts`:SSE usage 嗅探、跨分片重组、无 usage 时返回 null。
 - `lib/userscript_test.ts`:用轻量浏览器 mock 执行合并后的「囤囤鼠脚本」,覆盖
   元数据/胶囊文案、新旧 new-api 鉴权顺序、401 fallback、Bearer 隔离、分页已录入
-  判定、录入与取消覆盖、小胶囊拖拽与 `sessionStorage` 位置持久化/恢复。
+  判定、录入与取消覆盖、小胶囊拖拽与 `sessionStorage` 位置持久化/恢复;以及新版
+  scoped 令牌获取(静默用户名成功/失败弹窗、2FA 动态码重试、无密码账号 OAuth 授权
+  设密码与会话轮换、手动粘贴 + sha256 指纹权限校验、已存令牌复用跳过验证、
+  失效/指纹缺失/带过期令牌触发重建、401 自动刷新重试、HTTP 加密站点转手动、
+  rc.34–40 proof 回退、取消中止、 20 个上限提示、RSA-OAEP 密码加密可解密)。
 - `lib/upstream_login_userscript_test.ts`:覆盖免登 runtime 普通页面无副作用、
   fragment 两阶段启动与跳转 `/profile`、logout 与 `/self` 校验、
   sessionStorage/Storage shadow、fetch/XHR 同源注入及外域隔离、新版 AuthBundle、
-  禁止 PAT 轮换与退出清理、Passkey/会话端点的 401/403 响应兜底与成功透传、
-  合并脚本小胶囊的免登状态/confirm 退出/分步进度,以及 CloakBrowser memory-only
-  bootstrap 不把凭据写入 URL/Storage。
+  禁止 PAT 轮换与退出清理、Passkey/会话/访问令牌列表端点的 401/403 响应兜底与
+  成功透传(含 catalog 子路径不兜底)、合并脚本小胶囊的免登状态/confirm 退出/分步
+  进度,以及 CloakBrowser memory-only bootstrap 不把凭据写入 URL/Storage。
 - `components/upstream/upstream_login_test.ts`:覆盖脚本 marker 版本门禁、纯
   HTTP(S) origin 校验、fragment 凭据编码,以及登录链接仅在脚本就绪且 Origin
   合法时携带 PAT。
@@ -777,7 +813,7 @@ Fresh
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。合并后只保留这一个脚本路由。
 - 脚本源码包含通用免登逻辑与自身安装/更新 URL;PAT/userId 仅在页面检测到脚本
-  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.0.2"`)后,才进入账号
+  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.0"`)后,才进入账号
   「登录」链接 href 的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
 - 版本号:UI 页脚/登录页显示 `v1.5.0`,合并后的「囤囤鼠脚本」独立
-  `@version 2.0.2`;`deno.json` 无 version 字段。
+  `@version 2.1.0`;`deno.json` 无 version 字段。
