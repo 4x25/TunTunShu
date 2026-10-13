@@ -441,7 +441,7 @@ async function fetchTodayCheckin(
         };
       }
       | null;
-    // 站点未开放签到时上游回 {success:false,message:"签到功能未启用"};
+    // 站点未开放签到时上游回 {success:false,...}(中文或 i18n 英文 key);
     // 与其它失败区分开,供调用方落库标记。
     if (body?.success !== true) {
       return isCheckinDisabledMessage(body?.message)
@@ -893,8 +893,8 @@ export async function executeAccountCheckin(
     };
   }
   if (direct.kind === "disabled") {
-    // 站点未开放签到:不重试、不进浏览器;标记 skipped 并由 checkinAccount
-    // 把 checkin_enabled=false 落回站点快照。
+    // 站点未开放签到或上游没有该路由(HTTP 404):不重试、不进浏览器;标记
+    // skipped 并由 checkinAccount 把 checkin_enabled=false 落回站点快照。
     return {
       ...directBase,
       checkinStatus: "disabled",

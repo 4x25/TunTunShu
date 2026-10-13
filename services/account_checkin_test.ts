@@ -184,6 +184,54 @@ Deno.test("account check-in treats upstream disabled reply as skipped", async ()
   assertEquals(browserCalls, 0, "browser call count");
 });
 
+Deno.test("account check-in treats english disabled reply as skipped", async () => {
+  // i18n 改版后(≥ rc.43~8)POST 直接回英文 key,同样按未开放跳过。
+  let leaseCalls = 0;
+  const result = await runCheckin(account, {
+    loadSettings: () => settings(true),
+    directCheckin: () =>
+      Promise.resolve(response({
+        success: false,
+        message: "Check-in feature is not enabled",
+      })),
+    acquireLease: () => {
+      leaseCalls += 1;
+      return Promise.resolve({ acquired: false, waitedMs: 0 });
+    },
+  });
+  assertEquals(result.checkinStatus, "disabled", "check-in status");
+  assertEquals(result.taskStatus, "skipped", "task status");
+  assertEquals(result.skipped, true, "skipped flag");
+  assertEquals(leaseCalls, 0, "lease call count");
+});
+
+Deno.test("account check-in treats a 404 check-in route as disabled", async () => {
+  // 上游未注册 POST /api/user/checkin(旧版):404 直接判未开放,不抢租约、
+  // 不进浏览器,也不走 challenge 的 GET 复核。
+  let leaseCalls = 0;
+  let browserCalls = 0;
+  const result = await runCheckin(account, {
+    loadSettings: () => settings(true),
+    directCheckin: () =>
+      Promise.resolve(response("404 page not found", { status: 404 })),
+    acquireLease: () => {
+      leaseCalls += 1;
+      return Promise.resolve({ acquired: false, waitedMs: 0 });
+    },
+    browserCheckin: () => {
+      browserCalls += 1;
+      throw new Error("browser must not run");
+    },
+  });
+  assertEquals(result.checkinStatus, "disabled", "check-in status");
+  assertEquals(result.taskStatus, "skipped", "task status");
+  assertEquals(result.skipped, true, "skipped flag");
+  assertEquals(result.checkinMethod, "direct", "check-in method");
+  assertEquals(result.status, 404, "http status passthrough");
+  assertEquals(leaseCalls, 0, "lease call count");
+  assertEquals(browserCalls, 0, "browser call count");
+});
+
 Deno.test("account check-in leaves disabled and busy challenges skipped", async () => {
   const challenge = () =>
     Promise.resolve(response({

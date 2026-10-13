@@ -337,18 +337,22 @@ heartbeat 但不删除 lease row,让它保留到 150s TTL 后再开放执行槽�
 
 一次 `checkinAccount` 无论是否 fallback 都只写一条最终 `account_checkin`
 日志。站点 `status_data` 为 null(从未检测或标 down 清空)时,签到前先补一次
-`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定。三种「未开放
+`healthCheckSite` 把快照落库,再按新的 `checkin_enabled` 判定。四种「未开放
 签到」信号都直接返回 `disabled`/skipped + `skipped:true`(同时把 `checkin_status`
-标为 `disabled`,避免残留「需手动」),不直连、也不启动浏览器: ①快照里
+标为 `disabled`,避免残留「需手动」),不重试、也不启动浏览器: ①快照里
 `checkin_enabled === false`;②直连 `POST /api/user/checkin` 收到 new-api
-的权威业务回执 `{success:false,message:"签到功能未启用"}`(上游
-`controller/checkin.go`,HTTP 仍为 200);③直连只拿到 challenge 时,再用
-**不带中间件**的 `GET /api/user/checkin` 复核(`probeCheckinDisabled`)。③
-是必需的: new-api 路由是 `GET /checkin` 裸注册、`POST /checkin` 挂
-`middleware.TurnstileCheck()`,所以站点开了 Turnstile 又关着签到时,POST 会先回
-「Turnstile token 为空」,把「签到功能未启用」完全掩盖住。三者都会把
-`checkin_enabled=false` 合并写回 `sites.status_data`(`markSiteCheckinDisabled`),
-因此即使 `/api/status` 不可达,按钮与 cron 也能自己收敛到「未开放」。浏览器成功 →
+的权威业务回执 `{success:false,...}`(上游 `controller/checkin.go`,HTTP 仍为
+200;旧版 message 为中文「签到功能未启用」, i18n 改版即 `128089fa7`/首个含它的
+tag `v1.0.0-rc.43~8` 后 message 直接回英文 key「Check-in feature is not
+enabled」+`message_key`,本地两者都识别);③直连 `POST /api/user/checkin` 回 HTTP
+404(上游版本过旧、未注册该路由;上游关停签到功能走的是 ② 的业务回执);④直连只拿到
+challenge 时,再用 **不带中间件**的 `GET /api/user/checkin`
+复核(`probeCheckinDisabled`)。④ 是必需的: new-api 路由是 `GET /checkin`
+裸注册、`POST /checkin` 挂 `middleware.TurnstileCheck()`,所以站点开了 Turnstile
+又关着签到时,POST 会先回 「Turnstile token
+为空」,把「签到功能未启用」完全掩盖住。四者都会把 `checkin_enabled=false`
+合并写回 `sites.status_data`(`markSiteCheckinDisabled`), 因此即使 `/api/status`
+不可达,按钮与 cron 也能自己收敛到「未开放」。浏览器成功 →
 `checked`/success;功能关闭或租约 busy → `manual_required`/skipped;浏览器已经
 启动但超时、UI 不兼容或内部失败 → `manual_required`/failed。返回值额外带
 `checkinMethod:'direct'|'browser'` 与脱敏的

@@ -90,6 +90,60 @@ Deno.test("direct check-in classifier rejects untrusted HTML and ordinary errors
   );
 });
 
+Deno.test("direct check-in classifier treats missing check-in route as disabled", () => {
+  // 上游未注册 POST /api/user/checkin(旧版/未开放):404 视为未开放签到。
+  assertEquals(
+    classify("", 404),
+    {
+      kind: "disabled",
+      message: "站点未开放签到功能（HTTP 404）",
+      quotaAwarded: null,
+    },
+    "404 check-in route",
+  );
+  assertEquals(
+    classify(JSON.stringify({ success: false, message: "接口不存在" }), 404),
+    {
+      kind: "disabled",
+      message: "站点未开放签到功能（HTTP 404）",
+      quotaAwarded: null,
+    },
+    "404 with JSON body",
+  );
+  // 404 优先于 challenge 判定:签到路由不存在比挑战信号更强。
+  assertEquals(
+    classify("", 404, { "cf-mitigated": "challenge" }).kind,
+    "disabled",
+    "404 wins over challenge header",
+  );
+  // 其它 4xx 仍按普通失败处理。
+  assertEquals(classify("forbidden", 403).kind, "failed", "ordinary 403");
+});
+
+Deno.test("direct check-in classifier recognizes english disabled reply", () => {
+  // i18n 改版后(≥ rc.43~8)上游直接回英文 key,中文只留在 web 前端。
+  assertEquals(
+    classify(JSON.stringify({
+      success: false,
+      message: "Check-in feature is not enabled",
+    })),
+    {
+      kind: "disabled",
+      message: "Check-in feature is not enabled",
+      quotaAwarded: null,
+    },
+    "english disabled reply",
+  );
+  assertEquals(
+    classify(JSON.stringify({
+      success: false,
+      message: "Check-in is not enabled",
+    })).kind,
+    "disabled",
+    "short english disabled reply",
+  );
+});
+
 Deno.test("browser check-in settings are normalized safely", () => {
   assertEquals(browserCheckinEnabled("true"), true, "enabled setting");
   assertEquals(
