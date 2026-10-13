@@ -17,11 +17,10 @@ export const handler = define.handlers({
         count(*) filter (where status='down')::int down
       from sites`;
     const [accAgg] = await sql<
-      { total: number; healthy: number; invalid: number; quota_empty: number }[]
+      { total: number; healthy: number; invalid: number }[]
     >`select count(*)::int total,
         count(*) filter (where status='healthy')::int healthy,
-        count(*) filter (where status='invalid')::int invalid,
-        count(*) filter (where status='quota_empty')::int quota_empty
+        count(*) filter (where status='invalid')::int invalid
       from accounts`;
     const [keyAgg] = await sql<
       { total: number; healthy: number; invalid: number }[]
@@ -101,7 +100,6 @@ export const handler = define.handlers({
         total: accAgg.total,
         healthy: accAgg.healthy,
         invalid: accAgg.invalid,
-        quotaEmpty: accAgg.quota_empty,
       },
       apiKeys: {
         total: keyAgg.total,

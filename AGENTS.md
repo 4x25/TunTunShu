@@ -401,7 +401,8 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   `col->>'key'` 恒为 NULL(也不报错,极难发现)。显式 `::text::jsonb` 把参数固定为
   text(驱动原样发送),再由 jsonb 解析成对象。 `db/init.ts`
   启动时会幂等修复历史脏数据(`repairJsonCache`:把 jsonb `string` 与「被 `||`
-  合并后变成的 `array`」都还原成对象)。
+  合并后变成的 `array`」都还原成对象),并把历史遗留的
+  `accounts.status='quota_empty'` 归一为 `healthy`(该状态已从账号枚举移除)。
 
 ### Tables & status enums(types/enums.ts)
 
@@ -413,8 +414,8 @@ URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具�
   `{ok:true,hours,fetched_at,window_start?,window_end?,models[]}`,失败
   `{ok:false,hours,fetched_at,reason,http_status?/error?}`;失败整体覆盖写、不保留旧
   数据),从不经 `/api/sites` 列表透出。
-- `accounts.status`: unknown | healthy | invalid | quota_empty;`checkin_status`:
-  unknown | checked | unchecked | disabled | manual_required | failed(`disabled`
+- `accounts.status`: unknown | healthy | invalid;`checkin_status`: unknown |
+  checked | unchecked | disabled | manual_required | failed(`disabled`
   表示上游权威回执确认站点未开放签到,与 `unknown` 的
   「未知/拿不到定论」区分开);`accounts.user_data`
   (jsonb,可空):账号数据同步时落库的 `/api/user/self` data 负载缓存(脱敏 DTO,
@@ -464,10 +465,10 @@ cron `account_quota_sync`(jobs/account_quota_sync_job.ts 的
 Key 顺带拉模型,存量 Key 由 `api_key_model_sync` cron
 负责);手动入口为账号行「检测」按钮 (`POST /api/accounts/:id/sync`)与
 `POST /api/tasks/account-quota-sync`。数据同步部分 与「自动识别账号名」共用
-`GET /api/user/self`——刷新 quota/used_quota 与 `accounts.status`(成功且 quota>0
-→ healthy;quota=0 → quota_empty;业务失败/网络 异常 → invalid),并把整个 data
-负载(上游脱敏 DTO)缓存到 `accounts.user_data`, 失败时清空。self 成功后
-best-effort 调 `GET /api/user/checkin`,按 new-api 前端
+`GET /api/user/self`——刷新 quota/used_quota 与 `accounts.status`(成功 →
+healthy;业务失败/网络 异常 → invalid),并把整个 data 负载(上游脱敏 DTO)缓存到
+`accounts.user_data`, 失败时清空。self 成功后 best-effort 调
+`GET /api/user/checkin`,按 new-api 前端
 同样规则(`data.stats.checked_in_today === true`)同步今日签到到 `checkin_status`:
 true → `checked`,false → `unchecked`(但不覆盖本系统自标的 `manual_required`/
 `failed`);上游明确回执「签到功能未启用」时改判 `disabled`、清空

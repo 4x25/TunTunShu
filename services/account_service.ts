@@ -519,7 +519,7 @@ export async function syncAccountData(id: number) {
     // new-api 即使 access token 失效也返回 HTTP 200,业务成败在 body.success,
     // 故不能只看 response.ok,否则 {"success":false,...} 会被误判为成功。
     const ok = response.ok && data.success === true;
-    const status = ok ? quota === 0 ? "quota_empty" : "healthy" : "invalid";
+    const status = ok ? "healthy" : "invalid";
     let message = JSON.stringify(data).slice(0, 1000);
     let checkinStatus: CheckinStatus | null = null;
     // 今日签到记录:已签到时为今日 date/quota;未签到时清空;拿不到定论时保留原值。

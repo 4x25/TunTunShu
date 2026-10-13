@@ -253,4 +253,14 @@ export async function initializeDatabase() {
   } catch (error) {
     console.warn("[init] 修复双重编码的 jsonb 缓存失败:", error);
   }
+  // 历史遗留(幂等):账号状态曾含 `quota_empty`,该状态已从 accounts.status 移除;
+  // 存量行就地归一为 healthy(额度实际值仍由 quota 列如实反映),避免继续显示旧状态。
+  try {
+    await sql`
+      update accounts set status = 'healthy', updated_at = now()
+      where status = 'quota_empty'
+    `;
+  } catch (error) {
+    console.warn("[init] 归一账号 quota_empty 状态失败:", error);
+  }
 }

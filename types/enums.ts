@@ -5,7 +5,6 @@ export const accountStatuses = [
   "unknown",
   "healthy",
   "invalid",
-  "quota_empty",
 ] as const;
 export type AccountStatus = typeof accountStatuses[number];
 

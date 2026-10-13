@@ -15,6 +15,8 @@ export const TEST_KINDS: { kind: TestKind; label: string }[] = [
   { kind: "tool", label: "工具调用" },
 ];
 
+// 站点/账号/APIKey/上游模型行共用:各表只出现各自子集的状态,
+// 例如 down 仅站点、quota_empty 仅 APIKey(上游 token 额度耗尽)。
 export const STATUS_MAP: Record<string, [string, string]> = {
   healthy: ["ok", "正常"],
   down: ["bad", "异常"],
