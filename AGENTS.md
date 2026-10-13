@@ -267,11 +267,14 @@ listTokens(每页最多 100) → 优先使用旧版 listTokens item 中的明文
 `key`(非空且不含 `*`,原样 trim 后写入),否则对 `{id}` 调 getTokenKey → 按
 `(account_id, key)` upsert 进 `api_keys`,并用上游 token.status 同步本地
 `api_keys.enabled` (new-api:1=启用,2=禁用,3=过期,4=额度耗尽;本地仅 1 视作
-enabled=true)。高版本 listTokens 可能返回脱敏 `key`,不得直接使用。仅当 token
-列表与每个 token key 都完整获取成功时,才把本地同账号但本轮未发现的 `api_keys`
+enabled=true)。高版本 listTokens 可能返回脱敏 `key`,不得直接使用。上游标记为
+**已过期(status=3)的 token 不进入同步**:其对应本地 Key 连同归属的
+`upstream_models` 一并删除(结果与日志以 `expired=N` 反映)。仅当 token 列表与
+每个存活 token 的 key 都完整获取成功时,才把本地同账号但本轮未发现的 `api_keys`
 删除,并先删除归属于该 Key 的 `upstream_models`;若列表失败或任一 key
-获取不完整,跳过删除以避免误删。本流程默认会对本轮新增且启用的本地 Key 立即调用
-`syncApiKeyModels` 拉取模型;`refreshAccount`
+获取不完整,整轮失败并跳过删除(本轮此前的 upsert 仍已落库,无事务回滚),
+以避免误删。本流程默认会对本轮新增且启用的本地 Key 立即调用 `syncApiKeyModels`
+拉取模型;`refreshAccount`
 内部会关闭该默认,避免账号创建/编辑后的完整刷新重复拉模型。
 
 ## Browser-assisted check-in fallback

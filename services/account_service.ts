@@ -53,6 +53,8 @@ interface AccountApiKeySyncResult {
   ok: boolean;
   count: number;
   newKeys?: number;
+  /** 本轮上游发现并清理的过期(status=3)token 数。 */
+  expired?: number;
   pruned?: number;
   modelSyncs?: Awaited<ReturnType<typeof syncApiKeyModels>>[];
   error?: string;
@@ -91,12 +93,14 @@ function upstreamFailure(
   return `${action}失败: ${responseMessage(data, `HTTP ${response.status}`)}`;
 }
 
+// new-api token.status:1=启用,2=禁用,3=已过期,4=额度耗尽;本地仅 1 视作
+// enabled=true,其它一律禁用。
 function tokenEnabled(status: number | undefined): boolean {
   return typeof status === "number" ? status === 1 : true;
 }
 
+// status=3(已过期)在同步时已连同归属模型删除,不会走到这里。
 function tokenLocalStatus(status: number | undefined): string {
-  if (status === 3) return "invalid";
   if (status === 4) return "quota_empty";
   return "healthy";
 }
@@ -588,6 +592,13 @@ export async function syncAccountData(id: number) {
   }
 }
 
+/**
+ * 拉取上游 token 列表并与本地 api_keys 对齐:按 (account_id, key) upsert,
+ * 上游已下架的 Key 连同其 upstream_models 一起删除;上游明确标记为已过期
+ * (status=3)的 token 同样删除对应 Key 与其归属模型,不再保留为 invalid。
+ * 仅当 token 列表与每个存活 token 的 key 都完整获取成功时才执行删除,
+ * 否则整轮失败、不做任何删除。
+ */
 export async function syncAccountApiKeys(
   id: number,
   options: SyncAccountApiKeysOptions = {},
@@ -598,11 +609,17 @@ export async function syncAccountApiKeys(
 
   try {
     const tokens = await listAllAccountTokens(account);
+    // 上游已过期的 token(status=3)不进入同步:连同其归属的 upstream_models
+    // 一并删除(由下方 prune 环节执行),避免继续保留无效 Key。
+    const expired = tokens.filter((item) => item.status === 3).length;
+    const liveTokens = tokens.filter((item) => item.status !== 3);
+
     let synced = 0;
     const syncedLocalIds = new Set<number>();
     const newModelKeyIds: number[] = [];
 
-    for (const item of tokens) {
+    // 存活 token 照旧 upsert;过期 token 不进 syncedLocalIds,由下方 prune 删除。
+    for (const item of liveTokens) {
       let key = item.key;
       if (!key) {
         const keyResponse = await adapter.getTokenKey({
@@ -653,6 +670,7 @@ export async function syncAccountApiKeys(
     const localKeys = await sql<{ id: number }[]>`
       select id from api_keys where account_id = ${id}
     `;
+    // 本轮未发现的本地 Key(含上游已过期/已下架的)连同其归属模型删除。
     for (const local of localKeys) {
       if (syncedLocalIds.has(local.id)) continue;
       await sql`delete from upstream_models where api_key_id = ${local.id}`;
@@ -672,13 +690,14 @@ export async function syncAccountApiKeys(
       siteId: account.site_id,
       accountId: account.id,
       message:
-        `api_keys=${synced} new_keys=${newModelKeyIds.length} pruned=${pruned} model_syncs=${modelSyncs.length}`,
+        `api_keys=${synced} new_keys=${newModelKeyIds.length} pruned=${pruned} expired=${expired} model_syncs=${modelSyncs.length}`,
     });
     return {
       ok: true,
       count: synced,
       newKeys: newModelKeyIds.length,
       pruned,
+      expired,
       modelSyncs,
     };
   } catch (error) {
