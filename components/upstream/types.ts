@@ -118,3 +118,63 @@ export interface JobSummary {
   failed: number;
   skipped: number;
 }
+
+export type FingerprintDecision =
+  | "prediction"
+  | "partial"
+  | "not_model"
+  | "unscorable";
+
+export interface FingerprintView {
+  id: string;
+  name: string;
+}
+
+export interface FingerprintCandidate {
+  model: string;
+  displayName: string;
+  family: string;
+  familyName: string;
+  probability: number | null;
+  score: number;
+}
+
+export interface FingerprintSample {
+  index: number;
+  expectedCount: number;
+  parsedNumbers: number;
+  usedNumbers: number;
+  minimumNumbers: number;
+  accepted: boolean;
+  rawOutOfRangeCount: number;
+  anomalous: boolean;
+  capped: boolean;
+  latencyMs: number;
+  text: string;
+  error?: string;
+}
+
+export interface FingerprintResult {
+  claimedModel: string;
+  mappedModel: string | null;
+  endpointType: string;
+  decision: FingerprintDecision;
+  prediction: string;
+  predictionName: string;
+  familyName: string;
+  probability: number | null;
+  rankingScore: number | null;
+  usedOutputs: number;
+  results: FingerprintCandidate[];
+  samples: FingerprintSample[];
+  sequence: {
+    autocorrelation: number;
+    smallStepShare: number;
+    modelLike: boolean;
+  } | null;
+  evidence: { label: string; reason: string };
+  bankBuiltAt: string;
+  bankModelCount: number;
+  latencyMs: number;
+  error?: string;
+}

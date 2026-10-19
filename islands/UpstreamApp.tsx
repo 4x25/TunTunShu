@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { apiSend, getToken } from "../components/admin_api.ts";
 import { copyText } from "../components/clipboard.ts";
 import { useUrlState } from "../components/use_url_state.ts";
@@ -11,6 +11,7 @@ import {
   STATUS_MAP,
 } from "../components/upstream/constants.ts";
 import { useDebouncedValue } from "../components/upstream/list_state.ts";
+import { FingerprintResultModal } from "../components/upstream/FingerprintResultModal.tsx";
 import { LoginScriptModal } from "../components/upstream/LoginScriptModal.tsx";
 import { NewModelModal } from "../components/upstream/NewModelModal.tsx";
 import { ResourceModal } from "../components/upstream/ResourceModal.tsx";
@@ -27,6 +28,8 @@ import { useUpstreamPages } from "../components/upstream/use_upstream_pages.ts";
 import type {
   Account,
   ApiKey,
+  FingerprintResult,
+  FingerprintView,
   Flash,
   JobSummary,
   RefreshScope,
@@ -86,6 +89,14 @@ export default function UpstreamApp() {
   const [openEp, setOpenEp] = useState<string | null>(null);
   const [testView, setTestView] = useState<TestView | null>(null);
   const [testOut, setTestOut] = useState<TestResult | "loading" | null>(null);
+  const [fpView, setFpView] = useState<FingerprintView | null>(null);
+  const [fpOut, setFpOut] = useState<FingerprintResult | "loading" | null>(
+    null,
+  );
+  const [fpOpen, setFpOpen] = useState(false);
+  const [fpRunningId, setFpRunningId] = useState<string | null>(null);
+  const fpRunningRef = useRef<string | null>(null);
+  const fpSeq = useRef(0);
   const [loginHelpOpen, setLoginHelpOpen] = useState(false);
 
   const [flash, setFlash] = useState<Flash | null>(null);
@@ -157,6 +168,7 @@ export default function UpstreamApp() {
         setModal(null);
         setNmFor(null);
         setTestView(null);
+        setFpOpen(false);
         setLoginHelpOpen(false);
       }
     };
@@ -555,6 +567,7 @@ export default function UpstreamApp() {
   };
 
   async function runTest(m: UpstreamModel, kind: TestKind) {
+    setFpOpen(false);
     setTestView({ id: m.id, name: m.name, kind });
     setTestOut("loading");
     const fail = (reason: string, error: string): TestResult => ({
@@ -590,6 +603,93 @@ export default function UpstreamApp() {
     if (!testView) return;
     const m = ums.find((x) => x.id === testView.id);
     if (m) void runTest(m, testView.kind);
+  }
+
+  function fingerprintFail(
+    m: UpstreamModel,
+    message: string,
+  ): FingerprintResult {
+    return {
+      claimedModel: m.name,
+      mappedModel: m.model_id
+        ? models.find((x) => x.id === m.model_id)?.name ?? null
+        : null,
+      endpointType: m.endpoint_type,
+      decision: "unscorable",
+      prediction: "",
+      predictionName: "指纹验证失败",
+      familyName: "",
+      probability: null,
+      rankingScore: null,
+      usedOutputs: 0,
+      results: [],
+      samples: [],
+      sequence: null,
+      evidence: { label: "请求失败", reason: message },
+      bankBuiltAt: "",
+      bankModelCount: 0,
+      latencyMs: 0,
+      error: message,
+    };
+  }
+
+  async function startFingerprint(m: UpstreamModel) {
+    if (fpRunningRef.current !== null && fpRunningRef.current !== m.id) {
+      showFlash("已有指纹验证进行中，请稍候", false);
+      return;
+    }
+    if (fpRunningRef.current === m.id) {
+      setFpOpen(true);
+      return;
+    }
+    fpRunningRef.current = m.id;
+    const seq = ++fpSeq.current;
+    setTestView(null);
+    setFpView({ id: m.id, name: m.name });
+    setFpOut("loading");
+    setFpOpen(true);
+    setFpRunningId(m.id);
+    try {
+      const data = await apiSend<FingerprintResult>(
+        "POST",
+        `/upstream-models/${m.id}/fingerprint`,
+      );
+      if (fpSeq.current === seq) setFpOut(data);
+    } catch (e) {
+      if (fpSeq.current === seq) {
+        setFpOut(
+          fingerprintFail(
+            m,
+            e instanceof Error ? e.message : "指纹验证失败",
+          ),
+        );
+      }
+    } finally {
+      if (fpSeq.current === seq) {
+        fpRunningRef.current = null;
+        setFpRunningId(null);
+      }
+    }
+  }
+
+  function openFingerprint(m: UpstreamModel) {
+    if (fpRunningRef.current !== null && fpRunningRef.current !== m.id) {
+      showFlash("已有指纹验证进行中，请稍候", false);
+      return;
+    }
+    setTestView(null);
+    if (fpView?.id === m.id && fpOut !== null) {
+      setFpOpen(true);
+      return;
+    }
+    void startFingerprint(m);
+  }
+
+  function rerunFingerprint() {
+    if (!fpView) return;
+    const m = ums.find((x) => x.id === fpView.id);
+    if (m) void startFingerprint(m);
+    else showFlash("模型不在当前列表，请刷新后重试", false);
   }
 
   function openNewModel(umId: string) {
@@ -712,6 +812,8 @@ export default function UpstreamApp() {
           openDd={openDd}
           openEp={openEp}
           busy={busy}
+          fingerprintBusyId={fpRunningId}
+          fingerprintDisabled={fpRunningId !== null}
           onKeywordChange={(value) => setU({ modelKeyword: value })}
           onLoadMore={() => void loadUms("append")}
           onToggle={toggleUm}
@@ -729,6 +831,7 @@ export default function UpstreamApp() {
           onMap={setMap}
           onOpenNewModel={openNewModel}
           onRunTest={(m, kind) => void runTest(m, kind)}
+          onRunFingerprint={openFingerprint}
         />
       </div>
 
@@ -760,6 +863,12 @@ export default function UpstreamApp() {
         testOut={testOut}
         onClose={() => setTestView(null)}
         onRunAgain={rerunTest}
+      />
+      <FingerprintResultModal
+        view={fpOpen ? fpView : null}
+        out={fpOut}
+        onClose={() => setFpOpen(false)}
+        onRunAgain={rerunFingerprint}
       />
       <LoginScriptModal
         open={loginHelpOpen}

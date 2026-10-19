@@ -31,9 +31,9 @@ Bearer(`tts-auth`)、 `/api/*` 管理令牌,以及恒定有效的 `/v1` 代理 K
   ``)可作为参数传入。
 - **Database**: PostgreSQL,经 `npm:postgres` 原始驱动。**无 ORM、无 migration
   框架**。
-- **AI SDK(仅服务端)**:
-  `ai`、`@ai-sdk/openai|anthropic|google`,**仅**被上游模型测试功能
-  (`services/upstream_model_test_service.ts`)使用,与代理无关。必须在
+- **AI SDK(仅服务端)**: `ai`、`@ai-sdk/openai|anthropic|google`,被上游模型测试
+  (`services/upstream_model_test_service.ts`)与模型指纹验证
+  (`services/upstream_model_fingerprint_service.ts`)使用,与代理无关。必须在
   `vite.config.ts` 里保持 external(见 Gotchas)。
 - **浏览器自动化(仅服务端)**:`cloakbrowser@0.5.10` +
   `playwright-core@1.62.1`,仅用于签到的人机验证
@@ -48,7 +48,8 @@ deno task check    # deno fmt --check . && deno lint . && deno check  (注意:de
 deno task dev      # vite(HMR 开发服务器)
 deno task cloak:install # 下载 CloakBrowser 二进制到 _fresh/cloakbrowser
 deno task cloak:smoke   # 显式 opt-in 的真实账号浏览器签到冒烟(见 Tests)
-deno task build    # vite build → _fresh/,随后自动执行 cloak:install
+deno task fingerprint:sync # 按固定 commit 同步模型指纹参考库/检测器
+deno task build    # vite build → 复制指纹数据到 _fresh（含 server 子目录）→ cloak:install
 deno task start    # deno serve -A _fresh/server.js(生产)
 deno task update   # deno run -A -r jsr:@fresh/update .
 deno test -A       # 全部自动化测试
@@ -74,7 +75,9 @@ Deploy 会在推送后自动把关。
 已部署到 **Deno Deploy**:**推送代码到仓库即自动触发构建 + 预览**,无需手动部署。
 推送前先在本地跑通上面的校验三步。生产构建会把平台对应的 CloakBrowser 二进制
 放入 `_fresh/cloakbrowser`;运行时优先复用该产物并默认禁用自动更新,避免冷启动下载
-或构建后静默换版。
+或构建后静默换版。构建还会把 `data/fingerprint/` 的 `bank.json` 与
+`shared_detector.bin` 复制进 `_fresh/fingerprint-data/` 与
+`_fresh/server/fingerprint-data/`,确保只部署 `_fresh` 时指纹验证仍能读取数据。
 
 ## CI
 
@@ -125,12 +128,15 @@ services/        业务逻辑(被 routes 调用),各自写 system_task_logs
   perf_metrics_service.ts            站点 /api/perf-metrics/summary 抓取/归一化/落库 + 行级 3 槽成功率投影
   browser_checkin_service.ts         CloakBrowser 个人中心自动签到与运行时状态
   browser_checkin_lease_service.ts   PostgreSQL 全局浏览器租约(跨 Deploy 实例串行)
+  upstream_model_fingerprint_service.ts  上游模型指纹采样/排名/结果映射
 adapters/new_api_adapter.ts   对上游 new-api HTTP 的薄 fetch 封装
 db/client.ts     postgres 单例 getSql()(max:5, idle_timeout:20, connect_timeout:10;池被 cron 与 HTTP 共用)
 db/init.ts       启动时建表(见 Database)
 jobs/            5 个 cron 任务函数 + runner.ts(串行批处理器)
 lib/             auth、env、config(defaultSettings)、mask、request、response、sse、userscript、upstream_login_userscript、test_images
-scripts/         install_cloakbrowser.ts(构建期下载/冻结版本)、smoke_browser_checkin.ts(显式 opt-in 真实签到)
+lib/fingerprint/ 模型指纹算法(core/positional/analyze/challenges/data),移植自 MIT 的 lm-detector
+scripts/         install_cloakbrowser.ts(构建期下载/冻结版本)、smoke_browser_checkin.ts(显式 opt-in 真实签到)、sync_fingerprint_bank.ts、copy_fingerprint_data.ts
+data/fingerprint/ 指纹参考库快照(bank.json + shared_detector.bin + MIT LICENSE)
 types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端接口,islands 并不引用)、openai.ts
 ```
 
@@ -170,9 +176,10 @@ types/           enums.ts(状态字面量联合)、models.ts(camelCase 服务端
 - **upstream-models**: `GET /api/upstream-models`(带 `withPerf=1` 时每行附加
   `perf`,见下「站点性能数据同步」;不带时响应与历史一致);
   `GET|PATCH /api/upstream-models/:id`(PATCH 接受 `modelId:null`
-  解除映射、`endpointType`);`POST /api/upstream-models/:id/test`;`POST /api/upstream-models/batch-link`
-  与 `batch-unlink`(**两者都返回 501 notImplemented**)。**无 create POST、无
-  DELETE**——上游模型由同步任务创建。
+  解除映射、`endpointType`);`POST /api/upstream-models/:id/test`;
+  `POST /api/upstream-models/:id/fingerprint`(模型指纹验证,见下);
+  `POST /api/upstream-models/batch-link` 与 `batch-unlink`(**两者都返回 501
+  notImplemented**)。**无 create POST、无 DELETE**——上游模型由同步任务创建。
 - **模型同步差异处理**(`services/api_key_service.ts` 的 `syncApiKeyModels`,cron
   `api_key_model_sync` 与手动 `POST /api/api-keys/:id/sync-models`
   共用):拉取上游 `GET /v1/models` 后,按 `(api_key_id, name)`
@@ -368,7 +375,33 @@ apiKey。`endpoint_type`(`openai_chat`/`openai_responses`/`claude_messages`/`gem
 `chat|vision|tool`(随机算术/复述、 按 `lib/test_images.ts`
 的图片识别颜色、或工具调用)。`maxRetries=0`,超时 `max(header_timeout,15)s`。
 openai_chat 路径用一个 fetch 包装把裸 base64 的 `image_url` 修成合法 `data:`
-URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具调用 按钮。
+URL。UI 中体现为每个上游模型的 对话测试 / 图像识别 / 工具调用 按钮;指纹
+验证按钮见下节。
+
+## Model fingerprint verification(services/upstream_model_fingerprint_service.ts)
+
+`POST /api/upstream-models/:id/fingerprint`(admin)对某个上游模型做一次指纹验证。
+它**不是**调用 lm.ikale.io 的远程 API:该站是纯前端检测器,只提供静态参考库和转发
+代理。本仓把其 MIT 许可的算法与参考库内置在 `lib/fingerprint/` 与
+`data/fingerprint/`(快照 commit `654c8334`,60 个模型)。
+
+- 按 `endpoint_type` 复用测试服务的 `buildModel` 直连上游,生成 3 个随机语言挑战,
+  每个要求写 292–332 个 1–355 的整数;3 个请求并行。
+- 采样优先用 AI SDK `streamText`;解析最长连续数字串,达到目标数量后主动 abort;
+  正常结束但 finishReason 不是 `stop`(如
+  `length`/`content-filter`)的样本标记为未
+  完整,要求达到完整目标数量才采用。流式在未收到文本且非超时时失败时回退一次
+  `generateText`,fallback 使用本样本的剩余预算。每样本超时
+  `max(upstream_header_timeout_seconds,120s)`,`maxOutputTokens=8192`,不额外设置
+  reasoning effort。
+- 按 `max(80, ceil(expected_count*0.55))` 判定有效;超过目标数量截断。调用
+  `analyzeFingerprint(...,{allowPartial:true})`:3 条有效才给置信度;1–2
+  条只给部分 排名;相邻数字变化不像语言模型时返回 `not_model` 且不排名;样本最小值
+  ≥200 标记 分布异常。
+- 结果是参考库内的**闭集排序**,不是身份证明;库外模型也会得到“最接近”的候选。
+  置信度低于 75% 由前端提示低置信度;名称仅在归一化后精确相等时显示「名称一致」。
+- 无持久化、无 `system_task_logs`/`request_logs`、无新设置项;API Key 只在服务端
+  使用,采样原文与错误返回前脱敏。未实现上游的可选 tokenizer probe。
 
 ## Database
 
@@ -591,8 +624,11 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   展示),成功后按钮短暂显示对勾并走 flash 提示。 模型叶子:端点类型下拉(PATCH
   endpointType)、映射下拉(PATCH modelId,含「清除映射」→ null
   与「＋新增统一模型」→ POST /models)、测试入口。测试入口是 daisyUI 横向 icon
-  menu (`menu menu-horizontal menu-xs`,对话/图像/工具三个图标,文案走
-  `tooltip data-tip`),其左侧(`RowActions` 的 `left` 槽)是最近 3 时段成功率迷你柱
+  menu (`menu menu-horizontal menu-xs`,指纹验证 + 对话/图像/工具四个图标,文案走
+  `tooltip data-tip`);指纹按钮位于对话测试左侧,点击打开
+  `FingerprintResultModal`(3 次采样说明、识别结果/置信度、top 5 候选、3 条采样
+  诊断与可展开原文、低置信度/部分样本/不像语言模型/分布异常提示、闭集排序免责
+  声明、重新验证)。其左侧(`RowActions` 的 `left` 槽)是最近 3 时段成功率迷你柱
   (`PerfBadge.tsx` + `perf.ts`):≥90% 绿、≥70% 黄、其余红、无数据灰;悬浮 tooltip
   给出近 24 小时成功率/延迟/吞吐,站点不支持 / 未开放 / 抓取失败 / 无该模型数据 /
   待同步时各自给出对应文案(旧版数据额外标注「柱为最近有流量的时段」)。
@@ -770,10 +806,19 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - `services/browser_checkin_service_test.ts`:用 canary 覆盖错误脱敏,确保 PAT、
   Bearer、URL 凭据和 Turnstile/Captcha token 不进入日志/API message,并验证
   WebSocket 与 HTTP 使用相同 origin allowlist。
+- `lib/fingerprint/core_test.ts` + `challenges_test.ts` +
+  `sample_test.ts`:覆盖数字解析/特征维度、3 个 292–332 唯一长度挑战、采样有效性/
+  截断/异常分布、finishReason 判定与脱敏。
+- `lib/fingerprint/analyze_test.ts`:用随仓库发布的检测器与参考库对固定
+  `claude-haiku-4.5` 样本断言正确预测,并覆盖程序生成数字→`not_model`、单条有效→
+  `partial`、参考库/检测器不匹配报错。
+- `lib/fingerprint/data_test.ts`:覆盖数据路径与 bank/detector 兼容性。
+- `components/upstream/fingerprint_test.ts`:置信度格式化/阈值、决策文案与模型名精确匹配。
 
 运行 `deno test -A`。
 
-上游模型测试是运行时功能,不是自动化测试。
+上游模型测试与模型指纹验证都是运行时功能,不是自动化测试;指纹的自动化测试只覆盖
+算法、参考库兼容性、挑战生成与采样校验。
 
 `deno task cloak:smoke` 同样**不属于自动化测试**,会对真实账号执行签到并产生外部
 副作用。脚本默认拒绝运行,必须显式设置 `TTS_CLOAK_LIVE=1` 以及
@@ -804,10 +849,11 @@ Fresh
   CloakBrowser 的声明依赖 Node 类型；本仓
   `nodeModulesDir:"manual"`,故还需根级精确 `@types/node@26.0.1`,不能依赖上游
   devDependency 被隐式安装。
-- `deno task build` 会先让 Vite 重建 `_fresh`,再执行
+- `deno task build` 先让 Vite 重建 `_fresh`,再把指纹数据复制到
+  `_fresh/fingerprint-data/` 与 `_fresh/server/fingerprint-data/`,最后执行
   `cloak:install`;不要反转顺序或依赖 Vite 保留未知文件,必须保证最终上传的
-  `_fresh` 已包含浏览器。构建脚本强制在该次下载禁用自动更新,运行时 service
-  也默认 `CLOAKBROWSER_AUTO_UPDATE=false`；只有用户显式设置才
+  `_fresh` 同时包含浏览器与指纹数据。构建脚本强制在该次下载禁用自动更新,运行时
+  service 也默认 `CLOAKBROWSER_AUTO_UPDATE=false`；只有用户显式设置才
   覆盖。安装脚本还会写入 `tuntunshu-install.json`,运行时据此把本次构建验证过的
   binary 固定为 `CLOAKBROWSER_BINARY_PATH`,不会因 Production-only
   license/version 在请求内冷下载另一个版本。要让 GitHub Free/Pro key
@@ -823,5 +869,10 @@ Fresh
 - 脚本源码包含通用免登逻辑与自身安装/更新 URL;PAT/userId 仅在页面检测到脚本
   (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.0"`)后,才进入账号
   「登录」链接 href 的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
+- **模型指纹数据必须成对更新**:`data/fingerprint/bank.json` 的 `built_at`/模型
+  id/`response_count` 必须与 `shared_detector.bin` 完全一致,否则
+  `supportsDetector` 会拒绝分析。用 `deno task fingerprint:sync` 更新,更新后跑
+  `deno test -A`。数据与算法来自 Ikaleio/lm-detector(MIT),LICENSE 在
+  `data/fingerprint/LICENSE`;不要把上游 API Key 发给 lm.ikale.io 或任何第三方。
 - 版本号:UI 页脚/登录页显示 `v1.5.0`,合并后的「囤囤鼠脚本」独立
   `@version 2.1.0`;`deno.json` 无 version 字段。

@@ -1,13 +1,19 @@
 import { EndpointIcon } from "../brand_icons.tsx";
 import classNames from "classnames";
-import { IconChat, IconImage, IconSearch, IconTool } from "../icons.tsx";
+import {
+  IconChat,
+  IconFingerprint,
+  IconImage,
+  IconSearch,
+  IconTool,
+} from "../icons.tsx";
 import { ENDPOINT_LABELS, ENDPOINT_OPTIONS, TEST_KINDS } from "./constants.ts";
 import { handleColumnScroll } from "./list_state.ts";
 import { PerfBadge } from "./PerfBadge.tsx";
 import { MillerRow, RowActions, RowHead } from "./row_primitives.tsx";
 import type { ListPage, Model, TestKind, UpstreamModel } from "./types.ts";
 
-/** 三种测试入口的图标(横向 icon menu;文案放 tooltip)。 */
+/** 三种对话/视觉/工具测试入口的图标(横向 icon menu;文案放 tooltip)。 */
 const TEST_ICONS: Record<TestKind, typeof IconChat> = {
   chat: IconChat,
   vision: IconImage,
@@ -26,6 +32,8 @@ export function UpstreamModelColumn(
     openDd,
     openEp,
     busy,
+    fingerprintBusyId,
+    fingerprintDisabled,
     onKeywordChange,
     onLoadMore,
     onToggle,
@@ -36,6 +44,7 @@ export function UpstreamModelColumn(
     onMap,
     onOpenNewModel,
     onRunTest,
+    onRunFingerprint,
   }: {
     page: ListPage<UpstreamModel>;
     rows: UpstreamModel[];
@@ -47,6 +56,8 @@ export function UpstreamModelColumn(
     openDd: string | null;
     openEp: string | null;
     busy: string | null;
+    fingerprintBusyId: string | null;
+    fingerprintDisabled: boolean;
     onKeywordChange: (value: string) => void;
     onLoadMore: () => void;
     onToggle: (model: UpstreamModel) => void;
@@ -57,6 +68,7 @@ export function UpstreamModelColumn(
     onMap: (upstreamModelId: string, modelId: string | null) => void;
     onOpenNewModel: (upstreamModelId: string) => void;
     onRunTest: (model: UpstreamModel, kind: TestKind) => void;
+    onRunFingerprint: (model: UpstreamModel) => void;
   },
 ) {
   return (
@@ -214,6 +226,22 @@ export function UpstreamModelColumn(
                 </div>
                 <RowActions left={<PerfBadge perf={m.perf} />}>
                   <ul class="menu menu-horizontal menu-xs perf-test-menu">
+                    <li>
+                      <button
+                        type="button"
+                        class="tooltip tooltip-bottom tooltip-end"
+                        data-tip="指纹验证"
+                        aria-label="指纹验证"
+                        disabled={busy === "ep" + m.id ||
+                          (fingerprintDisabled &&
+                            fingerprintBusyId !== m.id)}
+                        onClick={() => onRunFingerprint(m)}
+                      >
+                        {fingerprintBusyId === m.id
+                          ? <span class="btn-spinner"></span>
+                          : <IconFingerprint />}
+                      </button>
+                    </li>
                     {TEST_KINDS.map((t) => {
                       const Icon = TEST_ICONS[t.kind];
                       return (

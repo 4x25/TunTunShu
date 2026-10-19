@@ -6,7 +6,8 @@
     "dev": "vite",
     "cloak:install": "deno run -A scripts/install_cloakbrowser.ts",
     "cloak:smoke": "deno run -A scripts/smoke_browser_checkin.ts",
-    "build": "vite build && deno task cloak:install",
+    "fingerprint:sync": "deno run -A scripts/sync_fingerprint_bank.ts",
+    "build": "vite build && deno run -A scripts/copy_fingerprint_data.ts && deno task cloak:install",
     "start": "deno serve -A _fresh/server.js",
     "update": "deno run -A -r jsr:@fresh/update ."
   },

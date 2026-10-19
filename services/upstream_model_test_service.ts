@@ -95,7 +95,7 @@ const repairImageUrlFetch: typeof globalThis.fetch = (input, init) => {
 };
 
 // ── 按端点类型构造 AI SDK 语言模型(baseURL=上游 origin, apiKey=上游 key) ──
-function buildModel(
+export function buildModel(
   ep: EndpointType,
   origin: string,
   key: string,
@@ -365,7 +365,7 @@ function buildCase(kind: TestKind): CaseSpec {
   };
 }
 
-async function resolveTimeoutMs(): Promise<number> {
+export async function resolveUpstreamTimeoutMs(): Promise<number> {
   const sql = getSql();
   const rows = await sql<{ value: string }[]>`
     select value from system_settings
@@ -378,7 +378,9 @@ async function resolveTimeoutMs(): Promise<number> {
   return Math.max(sec, 15) * 1000;
 }
 
-function describeError(err: unknown): { message: string; httpStatus?: number } {
+export function describeError(
+  err: unknown,
+): { message: string; httpStatus?: number } {
   const e = err as {
     name?: string;
     message?: string;
@@ -443,7 +445,7 @@ export async function testUpstreamModel(
     row.api_key,
     row.upstream_name,
   );
-  const timeoutMs = await resolveTimeoutMs();
+  const timeoutMs = await resolveUpstreamTimeoutMs();
   const startedAt = Date.now();
   try {
     const out = await spec.run(model, AbortSignal.timeout(timeoutMs));
