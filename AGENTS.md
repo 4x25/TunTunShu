@@ -648,7 +648,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   **仅在前端**追加一次 best-effort `sync-quota` 刷额度与签到记录——后端
   `checkinAccount`(及 cron/批量任务)只签到不刷额度,因该函数被批量共用。
 - **「囤囤鼠脚本」**按钮打开 `/tuntunshu.user.js?key=<token>`——安装合并后的
-  唯一油猴脚本(`lib/userscript.ts`,版本 `2.1.0`),它同时提供「快捷录入」与 「上游
+  唯一油猴脚本(`lib/userscript.ts`,版本 `2.1.2`),它同时提供「快捷录入」与 「上游
   PAT 免登」。脚本在页面左下角注入唯一的小胶囊按钮:免登状态显示
   「免登中(用户名)」,点击后 `confirm` 确认再退出;其他状态显示「快捷录入」;
   录入或免登前置进行中则按步骤显示文案与进度条。小胶囊初始停靠左下角(20px),
@@ -672,17 +672,20 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
   核对,退化为只读探测结论)。 ② **新版 new-api(≥ rc.41)**:探测
   `GET /api/user/access_tokens` 返回 200 时, 创建 scoped 令牌
   `POST /api/user/access_tokens`(dashboard token TTL 15 分钟,同源请求收到 401
-  时脚本会自动 refresh 一次再重试)——名称「囤囤鼠」、完整个人域 9 项
+  时脚本会自动 refresh 一次再重试)——名称「囤囤鼠」、完整个人域 10 项
   权限(profile:read/write、api_key:read/write/reveal、wallet:read/write、usage:read、
-  account_security:read)、`expires_at:0` 永不过期;创建前用
+  account_security:read/write)、`expires_at:0` 永不过期;创建前用
   `GET /api/verify/methods?scope=access_token.generate` 选择验证方式并取得一次性
   proof(`POST /api/verify`,60 秒有效、单次消费): 有 `password` →
-  先静默**用用户名当密码**尝试,失败(`SECURITY_VERIFICATION_FAILED`)
-  再弹窗输入密码;有 `2fa` → 弹窗输入 6 位动态码或备用码;仅 `oauth`(无密码账号)→
-  弹窗输入新密码(默认用户名,8–128 位),先完成一次 OAuth 授权弹窗
-  (`POST /api/oauth/state` → 弹窗写 sessionStorage 标记并跳转授权页 → 回调页
-  postMessage 回传 code → `GET /api/oauth/:provider` 换取 `account.password.set`
-  的 proof)再 `PUT /api/user/self` 设置密码(采用响应里轮换后的 dashboard token),
+  先静默**用用户名当密码**尝试(用户名不足 8 位时重复拼接至 ≥8 位, 如 `abc` →
+  `abcabcabc`,以通过 new-api 密码策略;补齐值失败后再回退原始用户名尝试一次,
+  兼容存量「密码=短用户名」账号——上游验证接口不施加长度策略),均失败
+  (`SECURITY_VERIFICATION_FAILED`) 再弹窗输入密码;有 `2fa` → 弹窗输入 6
+  位动态码或备用码;仅 `oauth`(无密码账号)→ 弹窗输入新密码(默认用户名,不足 8
+  位同样重复补齐),先完成一次 OAuth 授权弹窗 (`POST /api/oauth/state` → 弹窗写
+  sessionStorage 标记并跳转授权页 → 回调页 postMessage 回传 code →
+  `GET /api/oauth/:provider` 换取 `account.password.set` 的 proof)再
+  `PUT /api/user/self` 设置密码(采用响应里轮换后的 dashboard token),
   随后用该密码静默验证;仅 `passkey` / 验证被锁等异常 → 手动引导:在
   `<origin>/security`
   创建令牌后粘贴回弹窗,粘贴令牌同样按指纹核对权限。密码/动态码只发同源
@@ -702,7 +705,7 @@ system_task_logs、不抛错),故 **进程重启会丢失该次刷新**。
 - **上游账号 PAT 免登**:账号行「登录」渲染为真实
   `<a target="_blank"
   rel="noopener noreferrer">`:仅当当前页检测到脚本同步暴露的
-  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.0"`
+  `globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.2"`
   (`buildAccountLoginHref`)时才把
   `<site-origin>/#__tts_upstream_login__?accessToken=...&userId=...` 写入
   href,交给浏览器原生新标签打开(支持中键/右键复制链接);未安装或版本不符时
@@ -867,7 +870,7 @@ Fresh
 - `GET /tuntunshu.user.js` 无鉴权(main.ts 中间件),只嵌入调用方传入的
   `?key=`。错误 key 装出的脚本调 API 会 401。合并后只保留这一个脚本路由。
 - 脚本源码包含通用免登逻辑与自身安装/更新 URL;PAT/userId 仅在页面检测到脚本
-  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.0"`)后,才进入账号
+  (`globalThis.__TTS_UPSTREAM_LOGIN_SCRIPT__ === "2.1.2"`)后,才进入账号
   「登录」链接 href 的目标上游 URL fragment(未检测到时 href 为空,绝不携带凭据)。
 - **模型指纹数据必须成对更新**:`data/fingerprint/bank.json` 的 `built_at`/模型
   id/`response_count` 必须与 `shared_detector.bin` 完全一致,否则
@@ -875,4 +878,4 @@ Fresh
   `deno test -A`。数据与算法来自 Ikaleio/lm-detector(MIT),LICENSE 在
   `data/fingerprint/LICENSE`;不要把上游 API Key 发给 lm.ikale.io 或任何第三方。
 - 版本号:UI 页脚/登录页显示 `v1.5.0`,合并后的「囤囤鼠脚本」独立
-  `@version 2.1.0`;`deno.json` 无 version 字段。
+  `@version 2.1.2`;`deno.json` 无 version 字段。

@@ -11,6 +11,7 @@ const PAT_SCOPES = [
   "wallet:write",
   "usage:read",
   "account_security:read",
+  "account_security:write",
 ];
 
 function bodyOf(call: BrowserCall | undefined): Record<string, unknown> {
@@ -1138,7 +1139,7 @@ Deno.test("合并后的囤囤鼠脚本元数据与胶囊文案正确且可执行
   for (
     const directive of [
       "// @name         囤囤鼠脚本",
-      "// @version      2.1.0",
+      "// @version      2.1.2",
       "// @match        *://*/*",
       "// @grant        GM_xmlhttpRequest",
       "// @connect      tuntunshu.example",
@@ -1164,6 +1165,7 @@ Deno.test("userscript 新版:静默用户名失败后弹窗密码并创建 scope
     scopedSupport: true,
     verifyResponses: [
       { kind: "failure", code: "SECURITY_VERIFICATION_FAILED" },
+      { kind: "failure", code: "SECURITY_VERIFICATION_FAILED" },
       { kind: "success", proof: "proof-2" },
     ],
     createdToken: "nap_created_token",
@@ -1177,8 +1179,8 @@ Deno.test("userscript 新版:静默用户名失败后弹窗密码并创建 scope
 
   assertEquals(
     harness.verifyCalls.length,
-    2,
-    "应包含静默尝试与弹窗重试各一次验证",
+    3,
+    "应包含两次静默尝试(补齐值+原用户名)与弹窗重试各一次验证",
   );
   assertEquals(
     bodyOf(harness.verifyCalls[0]).method,
@@ -1187,8 +1189,13 @@ Deno.test("userscript 新版:静默用户名失败后弹窗密码并创建 scope
   );
   assertEquals(
     bodyOf(harness.verifyCalls[0]).password,
+    "modernmodern",
+    "首次静默尝试应使用补齐后的用户名",
+  );
+  assertEquals(
+    bodyOf(harness.verifyCalls[1]).password,
     "modern",
-    "静默尝试应使用用户名",
+    "第二次静默尝试应回退到原始用户名",
   );
   assertEquals(
     JSON.stringify(bodyOf(harness.verifyCalls[0]).context),
@@ -1196,7 +1203,7 @@ Deno.test("userscript 新版:静默用户名失败后弹窗密码并创建 scope
     "proof context 必须与创建请求保持一致",
   );
   assertEquals(
-    bodyOf(harness.verifyCalls[1]).password,
+    bodyOf(harness.verifyCalls[2]).password,
     "real-password",
     "弹窗密码未提交",
   );
@@ -1235,8 +1242,8 @@ Deno.test("userscript 新版:用户名即密码时静默创建令牌(无弹窗)"
   assertEquals(harness.verifyCalls.length, 1, "应只验证一次");
   assertEquals(
     bodyOf(harness.verifyCalls[0]).password,
-    "modern",
-    "静默尝试应使用用户名",
+    "modernmodern",
+    "静默尝试应使用用户名(不足 8 位时重复补齐)",
   );
   assertEquals(harness.accessTokenCreations.length, 1, "应创建一次令牌");
   const accountWrite = harness.ttsCalls.find((call) =>
@@ -1312,9 +1319,14 @@ Deno.test("userscript 无密码账号:OAuth 授权设置密码后创建令牌", 
   });
   const run = harness.click();
   const dialog = await harness.waitForDialog();
-  assertEquals(dialog.input?.value, "modern", "默认密码应为用户名");
+  assertEquals(
+    dialog.input?.value,
+    "modernmodern",
+    "默认密码应为用户名(不足 8 位时重复补齐)",
+  );
 
-  await harness.submitDialog();
+  // 默认值已补齐到 8 位以上;显式提交过短密码仍应被拦截。
+  await harness.submitDialog("modern");
   await waitUntil(
     () => (dialog.error?.textContent ?? "").includes("8–128"),
     "过短密码未提示",
@@ -1562,8 +1574,8 @@ Deno.test("userscript rc.34–40:旧端点要求 proof 时验证并携带 X-Secu
   assertEquals(harness.verifyCalls.length, 1, "应做一次密码验证");
   assertEquals(
     bodyOf(harness.verifyCalls[0]).password,
-    "modern",
-    "静默尝试应使用用户名",
+    "modernmodern",
+    "静默尝试应使用用户名(不足 8 位时重复补齐)",
   );
   assertEquals(
     "context" in bodyOf(harness.verifyCalls[0]),
@@ -1595,6 +1607,7 @@ Deno.test("userscript 新版:取消验证弹窗后中止保存", async () => {
     localUser: null,
     scopedSupport: true,
     verifyResponses: [
+      { kind: "failure", code: "SECURITY_VERIFICATION_FAILED" },
       { kind: "failure", code: "SECURITY_VERIFICATION_FAILED" },
     ],
   });
@@ -1811,6 +1824,7 @@ Deno.test("userscript 新版:密码加密站点提交 RSA-OAEP 密文", async ()
     passwordEncryption: true,
     verifyResponses: [
       { kind: "failure", code: "SECURITY_VERIFICATION_FAILED" },
+      { kind: "failure", code: "SECURITY_VERIFICATION_FAILED" },
       { kind: "success" },
     ],
   });
@@ -1819,7 +1833,7 @@ Deno.test("userscript 新版:密码加密站点提交 RSA-OAEP 密文", async ()
   await harness.submitDialog("real-password");
   await run;
 
-  assertEquals(harness.verifyCalls.length, 2, "静默尝试与弹窗各一次");
+  assertEquals(harness.verifyCalls.length, 3, "两次静默尝试与弹窗各一次");
   const first = bodyOf(harness.verifyCalls[0]);
   const second = bodyOf(harness.verifyCalls[1]);
   assertEquals(first.password, undefined, "加密站点不得提交明文密码");
@@ -1831,11 +1845,22 @@ Deno.test("userscript 新版:密码加密站点提交 RSA-OAEP 密文", async ()
   assert(privateKey, "测试私钥缺失");
   assertEquals(
     await decryptPasswordPayload(privateKey, String(first.password_encrypted)),
-    "modern",
-    "静默尝试的密文应解密为用户名",
+    "modernmodern",
+    "首次静默尝试的密文应解密为补齐后的用户名",
   );
   assertEquals(
-    await decryptPasswordPayload(privateKey, String(second.password_encrypted)),
+    await decryptPasswordPayload(
+      privateKey,
+      String(bodyOf(harness.verifyCalls[1]).password_encrypted),
+    ),
+    "modern",
+    "第二次静默尝试的密文应解密为原始用户名",
+  );
+  assertEquals(
+    await decryptPasswordPayload(
+      privateKey,
+      String(bodyOf(harness.verifyCalls[2]).password_encrypted),
+    ),
     "real-password",
     "弹窗输入的密文应解密为输入值",
   );

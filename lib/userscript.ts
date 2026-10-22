@@ -21,7 +21,7 @@
 import { buildUpstreamLoginRuntimeSource } from "./upstream_login_userscript.ts";
 
 /** 合并后的「囤囤鼠脚本」版本(同时作为免登 marker 版本)。 */
-export const TUNTUNSHU_SCRIPT_VERSION = "2.1.0";
+export const TUNTUNSHU_SCRIPT_VERSION = "2.1.2";
 
 export function buildUserScript(
   opts: { baseUrl: string; authKey: string },
@@ -58,7 +58,7 @@ export function buildUserScript(
   var TTS_KEY = ${keyLit};
 
   // ── 新版 new-api 的 scoped access token 参数 ────────────────────────
-  // 权限为完整个人域(不含 account_security:write);过期时间 0 = 永不过期,
+  // 权限为完整个人域(全部权限项);过期时间 0 = 永不过期,
   // 与旧版单 PAT 的行为对齐;固定名称便于用户在上游「安全」页辨认。
   var PAT_NAME = "囤囤鼠";
   var PAT_SCOPES = [
@@ -71,6 +71,7 @@ export function buildUserScript(
     "wallet:write",
     "usage:read",
     "account_security:read",
+    "account_security:write",
   ];
   var PAT_EXPIRES_AT = 0;
   var ACCESS_TOKEN_SCOPE = "access_token.generate";
@@ -1506,22 +1507,35 @@ ${buildUpstreamLoginRuntimeSource()}
     var username = auth.user && auth.user.username
       ? String(auth.user.username)
       : "";
-    var silent = username
-      ? verifyPassword(
-        auth,
-        request.scope,
-        request.context,
-        username,
-        request.encryptionEnabled,
-      )
-      : Promise.resolve({ ok: false, code: "NO_USERNAME", message: "" });
-    return silent.then(function (result) {
-      if (result.ok) return request.complete(result.proof);
-      var initialError = result.code === "SECURITY_VERIFICATION_FAILED"
-        ? ""
-        : (result.message || "");
-      return passwordDialog(auth, request, initialError);
-    });
+    // 静默候选:优先重复补齐后的用户名(通过 8–128 位密码策略的默认值);
+    // 再试原始用户名——上游验证接口不施加长度策略,存量「密码=短用户名」
+    // 的账号仍靠原值命中。两者都失败才弹窗。
+    var candidates = [];
+    var repeated = defaultPasswordFromUsername(username);
+    if (repeated) candidates.push(repeated);
+    if (username && candidates.indexOf(username) === -1) {
+      candidates.push(username);
+    }
+    var index = 0;
+    function tryNext(result) {
+      if (result && result.ok) return request.complete(result.proof);
+      if (result && result.code !== "SECURITY_VERIFICATION_FAILED" &&
+        result.code !== "NO_USERNAME" && result.message
+      ) {
+        return passwordDialog(auth, request, result.message);
+      }
+      if (index < candidates.length) {
+        return verifyPassword(
+          auth,
+          request.scope,
+          request.context,
+          candidates[index++],
+          request.encryptionEnabled,
+        ).then(tryNext);
+      }
+      return passwordDialog(auth, request, "");
+    }
+    return tryNext(null);
   }
 
   function twoFactorFlow(auth, request) {
@@ -1596,6 +1610,7 @@ ${buildUpstreamLoginRuntimeSource()}
     var username = auth.user && auth.user.username
       ? String(auth.user.username)
       : "";
+    var defaultPassword = defaultPasswordFromUsername(username);
     var providerOptions = request.providers.map(function (provider) {
       return {
         value: String(provider.slug),
@@ -1609,12 +1624,12 @@ ${buildUpstreamLoginRuntimeSource()}
     return ttsDialog({
       title: "设置账号密码",
       desc: "该账号未设置密码,且 new-api 要求先完成一次第三方登录授权验证。\\n" +
-        "脚本将为该账号设置密码(默认使用用户名),随后创建访问令牌并保存。",
+        "脚本将为该账号设置密码(默认使用用户名,不足 8 位时自动重复补齐),随后创建访问令牌并保存。",
       note: "密码需为 8–128 个字符;设置密码会登出该账号的其他浏览器会话。",
       input: {
         type: "password",
         label: "新密码",
-        value: username,
+        value: defaultPassword,
         placeholder: "8–128 个字符",
       },
       select: providerOptions.length > 1
@@ -1715,6 +1730,18 @@ ${buildUpstreamLoginRuntimeSource()}
 
   function hasSubtleCrypto() {
     return !!(crypto && crypto.subtle);
+  }
+
+  // new-api 密码策略要求 8–128 个字符;用户名不足 8 位时,静默验证与
+  // 「默认密码 = 用户名」都会因长度不达标必然失败。这里把用户名重复拼接
+  // 到 ≥8 个字符(如 "abc" → "abcabcabc"),仍保持「无需用户输入」的体验。
+  function defaultPasswordFromUsername(username) {
+    if (!username) return "";
+    var units = Array.from(username);
+    if (units.length >= 8) return username;
+    var repeated = [];
+    while (repeated.length < 8) repeated = repeated.concat(units);
+    return repeated.join("");
   }
 
   // HTTP 明文页面无法用 WebCrypto 做 RSA-OAEP;加密站点只能走手动粘贴。
